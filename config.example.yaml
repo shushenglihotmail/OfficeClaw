@@ -1,0 +1,102 @@
+# OfficeClaw Configuration
+# Copy this file to config.yaml and customize as needed.
+
+# WhatsApp Integration
+# On first run, scan the QR code with your WhatsApp mobile app to link.
+whatsapp:
+  # Path to SQLite database for WhatsApp session storage
+  database_path: "whatsapp.db"
+  # Trigger prefix - messages starting with this will be processed by the agent
+  trigger_prefix: "OfficeClaw:"
+  # Default task when none specified in message
+  default_task: "assist"
+
+# LLM provider configuration
+llm:
+  # Primary provider: "anthropic", "azure", "openai"
+  provider: "anthropic"
+
+  # Anthropic (Claude) configuration
+  # Uses the Claude Code CLI with organization SSO authentication.
+  # No API key required - the CLI must be pre-authenticated (run `claude` once to sign in).
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    max_tokens: 8192
+    # Path to Claude CLI executable (auto-detected if empty)
+    cli_path: ""
+
+  # Azure OpenAI configuration
+  azure:
+    endpoint: ""           # Or use AZURE_OPENAI_ENDPOINT env var
+    api_key: ""            # Or use AZURE_OPENAI_API_KEY env var
+    api_version: "2024-02-01"
+
+  # OpenAI direct configuration
+  openai:
+    api_key: ""  # Or use OPENAI_API_KEY env var
+    model: "gpt-4"
+    max_tokens: 8192
+
+  # Request settings
+  temperature: 0.1
+  request_timeout_seconds: 180
+
+# Tools configuration
+tools:
+  # Local file access tool
+  file_access:
+    enabled: true
+    # Allowed root directories for read-only file access
+    allowed_paths:
+      - "C:\\Users\\you\\Documents"
+      - "C:\\Projects"
+    max_file_size_mb: 10
+
+  # WhatsApp reply tool (auto-configured)
+  messaging:
+    enabled: true
+
+  # Task execution tool
+  task_execution:
+    enabled: true
+
+# Task definitions
+tasks:
+  # Built-in tasks
+  assist:
+    description: "General assistance - analyze message and respond helpfully"
+    timeout_seconds: 300
+
+  summarize_files:
+    description: "Summarize files in a directory"
+    timeout_seconds: 120
+
+  # Custom tasks can be added here
+  # my_custom_task:
+  #   description: "What this task does"
+  #   command: "powershell -File C:\\scripts\\my_script.ps1"
+  #   timeout_seconds: 60
+  #   schedule: "0 9 * * *"  # cron format, optional
+
+# Telemetry / Observability
+telemetry:
+  enabled: true
+  # Prometheus metrics endpoint
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  # OpenTelemetry
+  otel:
+    enabled: true
+    service_name: "officeclaw"
+    # OTLP exporter endpoint (optional, for external collectors)
+    # otlp_endpoint: "http://localhost:4317"
+
+# Logging
+logging:
+  level: "info"  # debug, info, warn, error
+  # Log file path (in addition to console)
+  file: "officeclaw.log"
+  max_size_mb: 50
+  max_backups: 3

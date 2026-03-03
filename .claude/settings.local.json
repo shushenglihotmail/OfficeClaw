@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make build-console:*)",
+      "Bash(go doc:*)",
+      "Bash(make test:*)",
+      "Bash(dir:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go get:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(git init:*)"
+    ]
+  }
+}

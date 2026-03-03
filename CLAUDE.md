@@ -1,0 +1,192 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+OfficeClaw is a Windows-native AI agent system that monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes tasks autonomously. The agent runs as a 24/7 background service with a system tray interface.
+
+## Key Development Commands
+
+```bash
+# Build for production (no console window)
+make build                  # Outputs to build/officeclaw.exe with -H windowsgui
+
+# Build for development (with console output)
+make build-console          # Outputs to build/officeclaw.exe
+
+# Run directly in development
+make run                    # Equivalent to: go run ./src
+
+# Run tests
+make test                   # Run all tests in test/
+make test-coverage          # Generate coverage.html
+
+# Code quality
+make lint                   # Run golangci-lint
+make fmt                    # Format code with gofmt
+
+# Dependency management
+make deps                   # Download and tidy dependencies
+```
+
+## Architecture Overview
+
+**Core Loop**: WhatsApp Listener → Agent → LLM ↔ Tools (repeat until final response)
+
+### Critical Flow (agent/agent.go:69-154)
+
+1. WhatsApp listener detects message starting with "OfficeClaw:"
+2. Message parsed for task name (defaults to `whatsapp.default_task`)
+3. Agent builds prompt with message context
+4. Agent enters LLM ↔ tool-call loop (max 20 rounds):
+   - LLM returns text and/or tool calls
+   - Tools execute and return results
+   - Results appended to conversation
+   - Repeat until LLM returns text with no tool calls
+
+### Package Responsibilities
+
+- **main.go**: Dependency injection, startup sequence, signal handling
+- **agent/**: Core orchestration loop, prompt building, conversation management
+- **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI), unified message format
+- **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
+- **whatsapp/**: WhatsApp Web integration via whatsmeow library
+- **tasks/**: Task registry, executor with timeout, cron scheduler
+- **config/**: YAML config loading with environment variable overrides
+- **telemetry/**: OpenTelemetry traces + Prometheus metrics
+- **tray/**: Windows system tray GUI
+
+## Adding New Components
+
+### Adding a Tool
+
+1. Create new file in `src/tools/` (e.g., `mytool.go`)
+2. Implement `tools.Tool` interface:
+   ```go
+   type Tool interface {
+       Name() string                                      // Unique identifier
+       Description() string                               // For LLM prompt
+       Parameters() map[string]interface{}                // JSON Schema
+       Execute(ctx context.Context, arguments string) (string, error)
+   }
+   ```
+3. Register in `main.go` (line ~78-93):
+   ```go
+   if cfg.Tools.MyTool.Enabled {
+       toolRegistry.Register(tools.NewMyTool(cfg.Tools.MyTool))
+   }
+   ```
+4. Add config struct to `config/config.go` and `config.example.yaml`
+
+**Important**: Tool `Execute()` receives arguments as a JSON string. Use `tools.ParseArgs[T]()` helper to unmarshal into a typed struct.
+
+### Adding an LLM Provider
+
+1. Create `src/llm/myprovider.go`
+2. Implement `llm.Provider` interface:
+   ```go
+   type Provider interface {
+       Name() string
+       ChatCompletion(ctx context.Context, req CompletionRequest) (*CompletionResponse, error)
+   }
+   ```
+3. Add case in `llm.NewClient()` (client.go:92-110)
+4. Add config struct to `config/config.go`
+
+**Note**: The `llm` package uses a unified message format. Providers must translate to/from their native API formats. See `claude_cli.go` for Claude CLI subprocess integration, and `openai.go` for OpenAI's tool-calling translation.
+
+### Adding a Task
+
+Tasks are defined in `config.yaml` and can be scheduled (cron) or on-demand:
+
+```yaml
+tasks:
+  my_task:
+    description: "What this task does"
+    command: "powershell -File C:\\scripts\\my_script.ps1"  # Optional
+    timeout_seconds: 60
+    schedule: "0 9 * * *"  # Optional cron schedule
+```
+
+Tasks without `command` are LLM-only interactions. Tasks with `command` execute external processes and optionally report results back through the LLM.
+
+## Configuration
+
+- Main config: `config.yaml` (copy from `config.example.yaml`)
+- Environment variables override config values
+- WhatsApp session stored in SQLite database (default: `whatsapp.db`)
+- Logs written to `logging.file` (default: `officeclaw.log`)
+
+**Critical config paths**:
+- `whatsapp.trigger_prefix`: Message prefix that activates agent (default: "OfficeClaw:")
+- `whatsapp.default_task`: Fallback task when none specified in trigger message
+- `llm.provider`: "anthropic", "azure", or "openai"
+- `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
+
+### WhatsApp Setup
+
+On first run, OfficeClaw displays a QR code. Scan it with your WhatsApp mobile app to link:
+
+1. Open WhatsApp on your phone
+2. Go to Settings → Linked Devices → Link a Device
+3. Scan the QR code displayed in the terminal
+4. Session is saved to `whatsapp.db` - subsequent runs reconnect automatically
+
+### LLM Authentication Options
+
+**Anthropic/Claude (Recommended)**: Uses the Claude Code CLI with organization SSO authentication. No API key required.
+
+The Claude CLI must be installed and pre-authenticated via SSO (run `claude` once to authenticate). The agent auto-discovers the CLI from:
+1. `CLAUDE_CLI_PATH` environment variable
+2. `~/.claude-cli/currentVersion/claude.exe`
+3. `~/.claude-cli/claude.exe`
+4. System PATH
+
+```yaml
+llm:
+  provider: "anthropic"
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    max_tokens: 8192
+    cli_path: ""  # Auto-detected if empty
+```
+
+**How it works**: The agent spawns the Claude CLI as a subprocess with `--output-format stream-json`. The CLI handles authentication via your organization's SSO. This mirrors the pattern used by LLMCrawl's Claude Bridge.
+
+**Azure OpenAI**: Requires endpoint and either API key or Entra ID bearer token.
+
+**OpenAI**: Requires `OPENAI_API_KEY` environment variable or `llm.openai.api_key` config.
+
+## Testing
+
+- Tests live in `test/` directory
+- Use `-count=1` to disable test caching: `go test ./test/... -v -count=1`
+- Integration tests require valid credentials (set env vars or config)
+- Mock LLM client available in test utilities
+
+## Security Notes
+
+- **WhatsApp session**: Stored in SQLite database. Keep `whatsapp.db` secure.
+- **File access tool**: Restricted to `allowed_paths` whitelist. Validates all paths against whitelist before reading.
+- **Task execution**: Commands run with agent's process privileges. Sanitize task configs.
+
+## Windows-Specific Considerations
+
+- System tray requires main thread: `tray.Run()` blocks in `main()` (tray/tray.go)
+- Build with `-ldflags="-H windowsgui"` to hide console window
+- Signal handling uses `syscall.SIGINT` and `syscall.SIGTERM`
+- Paths in config use Windows backslashes: `C:\\Users\\...`
+
+## Telemetry
+
+When enabled, Prometheus metrics exposed at `http://localhost:9090/metrics`:
+
+- `officeclaw.messages.received`: Trigger messages received
+- `officeclaw.messages.processed`: Messages successfully processed
+- `officeclaw.llm.requests`: LLM API calls (labeled by provider, model, status)
+- `officeclaw.llm.latency_seconds`: LLM call duration histogram
+- `officeclaw.tools.calls`: Tool invocations (labeled by tool, status)
+- `officeclaw.tasks.executed`: Task executions (labeled by task, status)
+
+OpenTelemetry tracing is also available when `telemetry.otel.enabled` is true.
