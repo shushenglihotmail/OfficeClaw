@@ -51,6 +51,10 @@ make deps                   # Download and tidy dependencies
 - **agent/**: Core orchestration loop, prompt building, conversation management
 - **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI), unified message format
 - **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
+  - `messaging.go`: WhatsApp reply tool
+  - `fileaccess.go`: Local file read tool (path-whitelisted)
+  - `taskexec.go`: Predefined task execution (only tasks in config are allowed)
+  - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
 - **whatsapp/**: WhatsApp Web integration via whatsmeow library
 - **tasks/**: Task registry, executor with timeout, cron scheduler
 - **config/**: YAML config loading with environment variable overrides
@@ -123,6 +127,8 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `whatsapp.default_task`: Fallback task when none specified in trigger message
 - `llm.provider`: "anthropic", "azure", or "openai"
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
+- `tools.vpn.vpn_names`: Windows VPN connection names (first is default)
+- `tasks.<name>.command`: Predefined command for task execution (only listed tasks are allowed)
 
 ### WhatsApp Setup
 
@@ -169,7 +175,8 @@ llm:
 
 - **WhatsApp session**: Stored in SQLite database. Keep `whatsapp.db` secure.
 - **File access tool**: Restricted to `allowed_paths` whitelist. Validates all paths against whitelist before reading.
-- **Task execution**: Commands run with agent's process privileges. Sanitize task configs.
+- **Task execution**: Only predefined tasks from `config.yaml` can be executed. The LLM cannot run arbitrary commands.
+- **VPN tool**: Only VPN names listed in `tools.vpn.vpn_names` are allowed. Uses cached Entra ID tokens for silent auth.
 
 ## Windows-Specific Considerations
 

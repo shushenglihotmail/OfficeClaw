@@ -76,6 +76,7 @@ type ToolsConfig struct {
 	FileAccess    FileAccessConfig    `yaml:"file_access"`
 	Messaging     MessagingConfig     `yaml:"messaging"`
 	TaskExecution TaskExecutionConfig `yaml:"task_execution"`
+	VPN           VPNConfig           `yaml:"vpn"`
 }
 
 // FileAccessConfig configures the local file read tool.
@@ -93,6 +94,16 @@ type MessagingConfig struct {
 // TaskExecutionConfig for the task tool.
 type TaskExecutionConfig struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// VPNConfig configures the VPN management tool.
+type VPNConfig struct {
+	Enabled               bool     `yaml:"enabled"`
+	VPNNames              []string `yaml:"vpn_names"`
+	ConnectTimeoutSeconds int      `yaml:"connect_timeout_seconds"`
+	KeepAliveEnabled      bool     `yaml:"keep_alive_enabled"`
+	KeepAliveMinutes      int      `yaml:"keep_alive_minutes"`
+	VerifyPath            string   `yaml:"verify_path"`
 }
 
 // Task defines a runnable task.
@@ -231,6 +242,17 @@ func applyDefaults(cfg *Config) {
 	// Tool defaults
 	if cfg.Tools.FileAccess.MaxFileSizeMB <= 0 {
 		cfg.Tools.FileAccess.MaxFileSizeMB = 10
+	}
+
+	// VPN defaults
+	if cfg.Tools.VPN.ConnectTimeoutSeconds <= 0 {
+		cfg.Tools.VPN.ConnectTimeoutSeconds = 30
+	}
+	if cfg.Tools.VPN.KeepAliveMinutes <= 0 {
+		cfg.Tools.VPN.KeepAliveMinutes = 30
+	}
+	if len(cfg.Tools.VPN.VPNNames) == 0 {
+		cfg.Tools.VPN.VPNNames = []string{"MSFT-AzVPN-Manual", "MSFTVPN-Manual"}
 	}
 }
 

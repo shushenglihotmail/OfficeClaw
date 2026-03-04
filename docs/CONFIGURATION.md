@@ -44,15 +44,28 @@ tools:
     max_file_size_mb: 10
   task_execution:
     enabled: true
+  vpn:
+    enabled: true
+    vpn_names:                    # Windows VPN connection names (first is default)
+      - "MyVPN-1"
+      - "MyVPN-2"
+    connect_timeout_seconds: 30
+    keep_alive_enabled: true      # Periodically reconnect if VPN drops
+    keep_alive_minutes: 30
+    # verify_path: "\\\\server\\share"  # Optional UNC path to verify connectivity
 
-# Tasks
+# Tasks (only predefined tasks can be executed)
 tasks:
   assist:
     description: "General assistance"
     timeout_seconds: 300
+  setupbuild:
+    description: "Set up a new OS repository build"
+    command: "c:\\tools\\setup-build.ps1 -branch main"
+    timeout_seconds: 600
   # Custom tasks:
   # my_task:
-  #   description: "Description"
+  #   description: "Description for LLM to match against"
   #   command: "powershell -File script.ps1"
   #   timeout_seconds: 60
   #   schedule: "0 9 * * *"       # cron format

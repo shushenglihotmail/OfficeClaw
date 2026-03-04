@@ -98,6 +98,13 @@ func (p *ClaudeCLIProvider) ChatCompletion(ctx context.Context, req CompletionRe
 	// Build prompt from messages
 	systemPrompt, promptText := buildPromptFromMessages(req.Messages)
 
+	// Inject tool definitions into the system prompt so the LLM knows
+	// what tools are available and how to call them via XML format.
+	if len(req.Tools) > 0 {
+		log.Printf("[llm/claude_cli] Injecting %d tool definitions into system prompt", len(req.Tools))
+		systemPrompt = injectToolDefinitions(systemPrompt, req.Tools)
+	}
+
 	if strings.TrimSpace(promptText) == "" {
 		return nil, fmt.Errorf("no prompt text derived from messages")
 	}
@@ -210,6 +217,31 @@ func buildPromptFromMessages(messages []Message) (string, string) {
 	}
 
 	return systemText, prompt
+}
+
+// injectToolDefinitions appends tool schemas and calling instructions to the system prompt.
+// This tells the Claude CLI model exactly what tools are available and how to invoke them
+// using the <function_calls><invoke> XML format that parseXMLToolCalls expects.
+func injectToolDefinitions(systemPrompt string, tools []ToolDefinition) string {
+	var sb strings.Builder
+	sb.WriteString(systemPrompt)
+	sb.WriteString("\n\n## Tools\n\n")
+	sb.WriteString("You have access to the following tools. To call a tool, use this exact XML format:\n\n")
+	sb.WriteString("<function_calls>\n<invoke name=\"tool_name\">\n<parameter name=\"param_name\">value</parameter>\n</invoke>\n</function_calls>\n\n")
+	sb.WriteString("IMPORTANT: You MUST use the exact XML format above for tool calls. Do NOT use any other format.\n")
+	sb.WriteString("Do NOT put tool calls inside markdown code blocks.\n")
+	sb.WriteString("You may call multiple tools by including multiple <invoke> blocks within a single <function_calls> block.\n\n")
+
+	for _, tool := range tools {
+		sb.WriteString(fmt.Sprintf("### %s\n", tool.Function.Name))
+		sb.WriteString(fmt.Sprintf("%s\n", tool.Function.Description))
+		if tool.Function.Parameters != nil {
+			paramsJSON, _ := json.MarshalIndent(tool.Function.Parameters, "", "  ")
+			sb.WriteString(fmt.Sprintf("Parameters (JSON Schema):\n```json\n%s\n```\n\n", string(paramsJSON)))
+		}
+	}
+
+	return sb.String()
 }
 
 // streamJSONEvent represents a single event from Claude CLI stream-json output.

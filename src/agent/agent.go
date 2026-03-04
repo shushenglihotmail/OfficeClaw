@@ -21,22 +21,22 @@ import (
 // MaxToolCallRounds limits tool-call loops to prevent runaway.
 const MaxToolCallRounds = 20
 
-// SystemPrompt provides the LLM with context about its role and capabilities.
-const SystemPrompt = `You are OfficeClaw, an AI assistant running as a Windows background agent.
+// SystemPromptBase provides the LLM with context about its role and capabilities.
+// Tool descriptions are appended dynamically at startup.
+const SystemPromptBase = `You are OfficeClaw, an AI assistant running as a Windows background agent.
 You monitor WhatsApp for trigger messages and help users accomplish tasks remotely.
 
-Your capabilities:
-1. send_message: Reply to WhatsApp messages. Always use this to respond to the user.
-2. read_file: Read local files from allowed directories. Use this to access documents the user references.
-3. execute_task: Run preconfigured tasks (scripts, scheduled operations).
-
-Guidelines:
+CRITICAL RULES:
+- NEVER tell the user a tool succeeded before you receive the tool result. Execute the tool FIRST, wait for the result, then report.
+- NEVER hallucinate or fabricate tool results, IP addresses, server names, or status information.
 - Always respond to the user via send_message with the chat_id from their message.
 - Be concise but thorough. Users are messaging from their phone.
 - If you need to read files to help, do so before responding.
 - If a task fails, explain the error clearly and suggest alternatives.
 - Respect file access boundaries - you can only read from allowed directories.
 - For tasks requiring multiple steps, complete all steps before sending your final response.
+- When asked to turn on, connect, or enable VPN, use the vpn_control tool with action "connect" — NOT execute_task.
+- Do NOT call send_message in the same round as a tool that performs an action. Wait for the action result first.
 
 When you receive a message, analyze the request, use appropriate tools, and send a helpful response.`
 
@@ -72,8 +72,16 @@ type Agent struct {
 
 // New creates a new Agent.
 func New(cfg Config) *Agent {
-	// Set the system prompt so the LLM understands its role
-	cfg.LLMClient.SetSystemPrompt(SystemPrompt)
+	// Build dynamic system prompt that includes all registered tool descriptions
+	toolDefs := cfg.ToolRegistry.Definitions()
+	var toolDescriptions strings.Builder
+	toolDescriptions.WriteString("\n\nAvailable tools:\n")
+	for i, td := range toolDefs {
+		toolDescriptions.WriteString(fmt.Sprintf("%d. %s: %s\n", i+1, td.Function.Name, td.Function.Description))
+	}
+
+	systemPrompt := SystemPromptBase + toolDescriptions.String()
+	cfg.LLMClient.SetSystemPrompt(systemPrompt)
 
 	return &Agent{
 		llmClient:    cfg.LLMClient,

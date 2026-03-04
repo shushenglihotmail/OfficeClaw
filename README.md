@@ -7,8 +7,8 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 - **24/7 Background Agent**: Runs as a Windows desktop app with system tray icon
 - **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web
 - **Multi-Provider LLM**: Claude (via CLI with SSO), Azure OpenAI, OpenAI — extensible to more
-- **Extensible Tool System**: Reply to messages, read local files, execute tasks
-- **Task Execution Engine**: Scheduled tasks with timeout, logging, and LLM reporting
+- **Extensible Tool System**: Reply to messages, read local files, execute tasks, manage VPN
+- **Task Execution Engine**: Predefined tasks with timeout, logging, and LLM reporting
 - **Observability**: OpenTelemetry + Prometheus metrics
 
 ## How It Works

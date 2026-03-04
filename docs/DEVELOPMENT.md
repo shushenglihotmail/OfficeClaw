@@ -43,7 +43,8 @@ src/
 │   ├── registry.go   # Tool interface & registry
 │   ├── messaging.go  # WhatsApp reply tool
 │   ├── fileaccess.go # Local file read tool
-│   └── taskexec.go   # Task execution tool
+│   ├── taskexec.go   # Task execution tool (predefined only)
+│   └── vpn.go        # VPN management tool (rasdial + Entra ID)
 ├── tasks/            # Task management
 │   └── executor.go   # Registry, executor, scheduler
 ├── tray/             # Windows system tray

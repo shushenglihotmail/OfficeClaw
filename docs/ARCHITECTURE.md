@@ -39,7 +39,8 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 │              │  ┌───────────┐  │                     │
 │              │  │ Messaging │  │  (WhatsApp reply)   │
 │              │  │ FileRead  │  │                     │
-│              │  │ TaskExec  │  │                     │
+│              │  │ TaskExec  │  │  (predefined only)  │
+│              │  │ VPNControl│  │  (rasdial + Entra)  │
 │              │  │ (custom)  │  │                     │
 │              │  └───────────┘  │                     │
 │              └─────────────────┘                     │

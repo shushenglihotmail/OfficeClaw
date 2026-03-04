@@ -60,9 +60,28 @@ tools:
   task_execution:
     enabled: true
 
+  # VPN management tool
+  # Connects using rasdial with cached Entra ID / SSO tokens (silent auth).
+  # When the token expires, manual sign-in is required on the VM.
+  vpn:
+    enabled: true
+    # VPN connection names as configured in Windows (first one is the default)
+    vpn_names:
+      - "MyVPN-1"
+      - "MyVPN-2"
+    # Timeout for connection attempts (seconds)
+    connect_timeout_seconds: 30
+    # Keep-alive: periodically check and reconnect if VPN drops
+    keep_alive_enabled: true
+    keep_alive_minutes: 30
+    # Optional: UNC path to verify internal network access after connecting
+    # verify_path: "\\\\internal-share\\folder"
+
 # Task definitions
+# Only predefined tasks listed here can be executed by the agent.
+# The agent will refuse to run any task not in this list.
 tasks:
-  # Built-in tasks
+  # Built-in tasks (LLM-driven, no command)
   assist:
     description: "General assistance - analyze message and respond helpfully"
     timeout_seconds: 300
@@ -71,12 +90,26 @@ tasks:
     description: "Summarize files in a directory"
     timeout_seconds: 120
 
-  # Custom tasks can be added here
-  # my_custom_task:
-  #   description: "What this task does"
-  #   command: "powershell -File C:\\scripts\\my_script.ps1"
+  # Predefined command tasks
+  # The agent matches user requests to tasks by description, so use clear descriptions.
+  # Example:
+  #   User says: "set up a build" → agent matches "setupbuild" by description
+  setupbuild:
+    description: "Set up a new OS repository build on the machine"
+    command: "c:\\tools\\setup-build.ps1 -branch main"
+    timeout_seconds: 600
+
+  # More examples:
+  # check_disk:
+  #   description: "Check disk space and usage on all drives"
+  #   command: "Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free -AutoSize"
   #   timeout_seconds: 60
-  #   schedule: "0 9 * * *"  # cron format, optional
+  #
+  # restart_service:
+  #   description: "Restart a Windows service"
+  #   command: "Restart-Service -Name MyService -Force"
+  #   timeout_seconds: 120
+  #   schedule: "0 3 * * *"  # cron format, optional
 
 # Telemetry / Observability
 telemetry:

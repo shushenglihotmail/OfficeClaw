@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/officeclaw/src/tasks"
 )
@@ -21,7 +22,14 @@ func NewTaskExecutionTool(executor *tasks.Executor) *TaskExecutionTool {
 func (t *TaskExecutionTool) Name() string { return "execute_task" }
 
 func (t *TaskExecutionTool) Description() string {
-	return "Execute a preconfigured task by name. Tasks can run commands, scripts, or scheduled operations. Returns output and status."
+	taskList := t.executor.ListTasks()
+	names := make([]string, 0, len(taskList))
+	for _, tl := range taskList {
+		names = append(names, fmt.Sprintf("%s (%s)", tl.Name, tl.Description))
+	}
+	return fmt.Sprintf("Execute a predefined task by name. ONLY the following tasks are allowed — do NOT invent task names: %s. "+
+		"Match the user's request to the best task by its description.",
+		strings.Join(names, "; "))
 }
 
 func (t *TaskExecutionTool) Parameters() map[string]interface{} {

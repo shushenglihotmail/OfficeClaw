@@ -90,6 +90,9 @@ func main() {
 	if cfg.Tools.TaskExecution.Enabled {
 		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor))
 	}
+	if cfg.Tools.VPN.Enabled {
+		toolRegistry.Register(tools.NewVPNTool(cfg.Tools.VPN))
+	}
 	logger.Printf("Tool registry initialized (%d tools registered)", toolRegistry.Count())
 
 	// Create the core agent
