@@ -21,14 +21,24 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// MessageMode indicates which agent mode to use for a message.
+type MessageMode string
+
+const (
+	ModeOfficeClaw MessageMode = "officeclaw" // Custom OfficeClaw agent
+	ModeClaude     MessageMode = "claude"     // Direct Claude CLI agent
+)
+
 // Client wraps the whatsmeow client for WhatsApp Web integration.
 type Client struct {
-	client        *whatsmeow.Client
-	container     *sqlstore.Container
-	logger        *log.Logger
-	triggerPrefix string
-	handler       MessageHandler
-	mu            sync.RWMutex
+	client             *whatsmeow.Client
+	container          *sqlstore.Container
+	logger             *log.Logger
+	triggerPrefix      string       // e.g., "OfficeClaw:"
+	claudeTrigger      string       // e.g., "OfficeClaw-Claude:"
+	handler            MessageHandler
+	claudeHandler      MessageHandler
+	mu                 sync.RWMutex
 }
 
 // MessageHandler is called when a trigger message is received.
@@ -36,20 +46,23 @@ type MessageHandler func(ctx context.Context, msg IncomingMessage)
 
 // IncomingMessage represents a WhatsApp message that triggered the agent.
 type IncomingMessage struct {
-	ID        string // Message ID
-	ChatJID   string // Chat JID (sender or group)
-	SenderJID string // Sender JID
-	Body      string // Message body (without trigger prefix)
-	IsGroup   bool   // Whether message is from a group
-	TaskName  string // Parsed task name
+	ID        string      // Message ID
+	ChatJID   string      // Chat JID (sender or group)
+	SenderJID string      // Sender JID
+	Body      string      // Message body (without trigger prefix)
+	IsGroup   bool        // Whether message is from a group
+	TaskName  string      // Parsed task name
+	Mode      MessageMode // Which agent mode to use
 }
 
 // Config holds WhatsApp client configuration.
 type Config struct {
 	// Path to SQLite database for session storage
 	DatabasePath string
-	// Trigger prefix (e.g., "OfficeClaw:")
+	// Trigger prefix for OfficeClaw agent (e.g., "OfficeClaw:")
 	TriggerPrefix string
+	// Trigger prefix for Claude CLI agent (e.g., "OfficeClaw-Claude:")
+	ClaudeTrigger string
 	// Default task when none specified
 	DefaultTask string
 	// Logger
@@ -62,7 +75,10 @@ func New(cfg Config) (*Client, error) {
 		cfg.DatabasePath = "whatsapp.db"
 	}
 	if cfg.TriggerPrefix == "" {
-		cfg.TriggerPrefix = "OfficeClaw:"
+		cfg.TriggerPrefix = "OC:"
+	}
+	if cfg.ClaudeTrigger == "" {
+		cfg.ClaudeTrigger = "OCC:"
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stdout, "[whatsapp] ", log.LstdFlags)
@@ -92,6 +108,7 @@ func New(cfg Config) (*Client, error) {
 		container:     container,
 		logger:        cfg.Logger,
 		triggerPrefix: cfg.TriggerPrefix,
+		claudeTrigger: cfg.ClaudeTrigger,
 	}, nil
 }
 
@@ -134,11 +151,18 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// SetMessageHandler sets the callback for incoming trigger messages.
+// SetMessageHandler sets the callback for incoming OfficeClaw agent trigger messages.
 func (c *Client) SetMessageHandler(handler MessageHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.handler = handler
+}
+
+// SetClaudeHandler sets the callback for incoming Claude CLI agent trigger messages.
+func (c *Client) SetClaudeHandler(handler MessageHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.claudeHandler = handler
 }
 
 // eventHandler processes incoming WhatsApp events.
@@ -155,7 +179,7 @@ func (c *Client) eventHandler(evt interface{}) {
 	}
 }
 
-// handleMessage processes incoming messages and triggers the agent if prefix matches.
+// handleMessage processes incoming messages and triggers the appropriate agent if prefix matches.
 func (c *Client) handleMessage(msg *events.Message) {
 	// Get message text
 	var text string
@@ -168,35 +192,49 @@ func (c *Client) handleMessage(msg *events.Message) {
 		return
 	}
 
-	// Check if message starts with trigger prefix (case-insensitive)
-	if !strings.HasPrefix(strings.ToLower(text), strings.ToLower(c.triggerPrefix)) {
+	textLower := strings.ToLower(text)
+
+	// Determine which mode to use (check Claude trigger first since it's longer/more specific)
+	var mode MessageMode
+	var prefix string
+	var handler MessageHandler
+
+	c.mu.RLock()
+	if strings.HasPrefix(textLower, strings.ToLower(c.claudeTrigger)) {
+		mode = ModeClaude
+		prefix = c.claudeTrigger
+		handler = c.claudeHandler
+	} else if strings.HasPrefix(textLower, strings.ToLower(c.triggerPrefix)) {
+		mode = ModeOfficeClaw
+		prefix = c.triggerPrefix
+		handler = c.handler
+	} else {
+		c.mu.RUnlock()
 		return
 	}
+	c.mu.RUnlock()
 
 	// Skip agent's own replies (messages from self that don't have trigger prefix were already filtered)
 	// We allow trigger messages from self so you can control your own agent
 	if msg.Info.IsFromMe {
-		// This is a trigger message from self - that's fine, process it
 		c.logger.Printf("Processing self-trigger message")
 	}
 
 	// Extract content after prefix (case-insensitive removal)
-	content := text[len(c.triggerPrefix):]
+	content := text[len(prefix):]
 	content = strings.TrimSpace(content)
 
-	// Parse task name (first word) or use default
+	// Parse task name (first word) or use default - only for OfficeClaw mode
 	taskName := "assist"
-	parts := strings.Fields(content)
-	if len(parts) > 0 {
-		taskName = parts[0]
-		content = strings.TrimSpace(strings.TrimPrefix(content, taskName))
+	if mode == ModeOfficeClaw {
+		parts := strings.Fields(content)
+		if len(parts) > 0 {
+			taskName = parts[0]
+			content = strings.TrimSpace(strings.TrimPrefix(content, taskName))
+		}
 	}
 
-	c.logger.Printf("Trigger message from %s: task=%s", msg.Info.Sender.User, taskName)
-
-	c.mu.RLock()
-	handler := c.handler
-	c.mu.RUnlock()
+	c.logger.Printf("Trigger message from %s: mode=%s, task=%s", msg.Info.Sender.User, mode, taskName)
 
 	if handler != nil {
 		incoming := IncomingMessage{
@@ -206,8 +244,11 @@ func (c *Client) handleMessage(msg *events.Message) {
 			Body:      content,
 			IsGroup:   msg.Info.IsGroup,
 			TaskName:  taskName,
+			Mode:      mode,
 		}
 		go handler(context.Background(), incoming)
+	} else {
+		c.logger.Printf("No handler registered for mode %s", mode)
 	}
 }
 

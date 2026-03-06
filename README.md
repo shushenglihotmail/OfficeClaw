@@ -13,13 +13,26 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 
 ## How It Works
 
-Send a WhatsApp message to yourself starting with `OfficeClaw:` and the agent will process it:
+Send a WhatsApp message to yourself with a trigger prefix:
 
+### OC: Mode (OfficeClaw Agent)
+Uses the OfficeClaw agent with custom tools (file access, task execution, messaging):
 ```
-OfficeClaw: what files are in my Documents folder?
-OfficeClaw: summarize_files check the project logs
-OfficeClaw: help me draft a response to the last email I received
+OC: what files are in my Documents folder?
+OC: summarize_files check the project logs
+OC: run the backup task
 ```
+
+### OCC: Mode (Claude CLI Agent)
+Invokes Claude CLI directly as an autonomous agent with auto-approval of all tool requests:
+```
+OCC: refactor the main.go file to use dependency injection
+OCC: analyze this codebase and suggest improvements
+OCC: help me debug the failing test
+```
+Claude CLI runs in the configured `claude_working_folder` with full tool access.
+
+Both triggers are **case-insensitive** (e.g., `oc:`, `OC:`, `Oc:` all work).
 
 ## Quick Start
 

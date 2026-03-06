@@ -6,8 +6,14 @@
 whatsapp:
   # Path to SQLite database for WhatsApp session storage
   database_path: "whatsapp.db"
-  # Trigger prefix - messages starting with this will be processed by the agent
-  trigger_prefix: "OfficeClaw:"
+  # Trigger prefix - messages starting with this will be processed by OfficeClaw agent
+  trigger_prefix: "OC:"
+  # Trigger prefix for direct Claude CLI agent mode (bypasses OfficeClaw agent)
+  # Claude CLI runs with full autonomy and auto-approval of all tool requests
+  claude_trigger: "OCC:"
+  # Working folder for Claude CLI agent (used with OCC: trigger)
+  # Claude will execute with this as its working directory
+  claude_working_folder: "C:\\Projects\\MyRepo"
   # Default task when none specified in message
   default_task: "assist"
 

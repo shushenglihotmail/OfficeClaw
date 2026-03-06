@@ -32,11 +32,12 @@ make deps                   # Download and tidy dependencies
 
 ## Architecture Overview
 
-**Core Loop**: WhatsApp Listener → Agent → LLM ↔ Tools (repeat until final response)
+OfficeClaw supports two operating modes triggered by different prefixes (both case-insensitive):
 
-### Critical Flow (agent/agent.go:69-154)
+### OC: Mode (OfficeClaw Agent)
+**Core Loop**: WhatsApp Listener → OfficeClaw Agent → LLM ↔ Tools (repeat until final response)
 
-1. WhatsApp listener detects message starting with "OfficeClaw:"
+1. WhatsApp listener detects message starting with "OC:"
 2. Message parsed for task name (defaults to `whatsapp.default_task`)
 3. Agent builds prompt with message context
 4. Agent enters LLM ↔ tool-call loop (max 20 rounds):
@@ -44,6 +45,18 @@ make deps                   # Download and tidy dependencies
    - Tools execute and return results
    - Results appended to conversation
    - Repeat until LLM returns text with no tool calls
+
+### OCC: Mode (Claude CLI Agent)
+**Direct invocation**: WhatsApp Listener → Claude CLI (with auto-approval)
+
+1. WhatsApp listener detects message starting with "OCC:"
+2. Claude CLI spawned with `--dangerously-skip-permissions` (auto-approval)
+3. Claude runs in `whatsapp.claude_working_folder` with full tool access
+4. Claude executes autonomously using its built-in tools
+5. Final response sent back via WhatsApp
+
+This mode bypasses OfficeClaw's agent loop entirely, giving Claude CLI full autonomy.
+See `agent/claude_agent.go` for implementation.
 
 ### Package Responsibilities
 
@@ -123,8 +136,10 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - Logs written to `logging.file` (default: `officeclaw.log`)
 
 **Critical config paths**:
-- `whatsapp.trigger_prefix`: Message prefix that activates agent (default: "OfficeClaw:")
-- `whatsapp.default_task`: Fallback task when none specified in trigger message
+- `whatsapp.trigger_prefix`: Message prefix for OfficeClaw agent mode (default: "OC:")
+- `whatsapp.claude_trigger`: Message prefix for Claude CLI agent mode (default: "OCC:")
+- `whatsapp.claude_working_folder`: Working directory for Claude CLI agent
+- `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
 - `llm.provider`: "anthropic", "azure", or "openai"
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
 - `tools.vpn.vpn_names`: Windows VPN connection names (first is default)

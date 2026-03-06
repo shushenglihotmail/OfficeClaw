@@ -47,6 +47,7 @@ func main() {
 	waClient, err := whatsapp.New(whatsapp.Config{
 		DatabasePath:  cfg.WhatsApp.DatabasePath,
 		TriggerPrefix: cfg.WhatsApp.TriggerPrefix,
+		ClaudeTrigger: cfg.WhatsApp.ClaudeTrigger,
 		DefaultTask:   cfg.WhatsApp.DefaultTask,
 		Logger:        logger,
 	})
@@ -108,7 +109,7 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Bridge WhatsApp messages to agent
+	// Bridge WhatsApp messages to OfficeClaw agent
 	waClient.SetMessageHandler(func(ctx context.Context, msg whatsapp.IncomingMessage) {
 		agentInstance.HandleMessage(ctx, agent.IncomingMessage{
 			Source:    "whatsapp",
@@ -122,6 +123,21 @@ func main() {
 		})
 	})
 	logger.Printf("WhatsApp listener active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
+
+	// Initialize Claude CLI agent for direct Claude mode
+	claudeAgent, err := agent.NewClaudeAgent(agent.ClaudeAgentConfig{
+		CLIPath:       cfg.LLM.Anthropic.CLIPath,
+		WorkingFolder: cfg.WhatsApp.ClaudeWorkingFolder,
+		WAClient:      waClient,
+		Logger:        logger,
+	})
+	if err != nil {
+		logger.Printf("Warning: Claude CLI agent not available: %v", err)
+	} else {
+		waClient.SetClaudeHandler(claudeAgent.HandleMessage)
+		logger.Printf("Claude CLI agent active (trigger: %s, folder: %s)",
+			cfg.WhatsApp.ClaudeTrigger, cfg.WhatsApp.ClaudeWorkingFolder)
+	}
 
 	// Start task scheduler
 	go taskExecutor.StartScheduler(ctx)

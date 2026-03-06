@@ -6,8 +6,10 @@
 # WhatsApp Integration
 whatsapp:
   database_path: "whatsapp.db"    # SQLite database for session storage
-  trigger_prefix: "OfficeClaw:"   # Prefix that activates the agent
-  default_task: "assist"          # Task when none specified in trigger
+  trigger_prefix: "OC:"           # Prefix for OfficeClaw agent mode
+  claude_trigger: "OCC:"          # Prefix for direct Claude CLI agent mode
+  claude_working_folder: "C:\\Projects\\MyRepo"  # Working folder for Claude CLI
+  default_task: "assist"          # Task when none specified in OC: trigger
 
 # LLM provider
 llm:
@@ -161,15 +163,33 @@ Or set `OPENAI_API_KEY` environment variable.
 
 ## Trigger Message Format
 
-Send a WhatsApp message starting with your trigger prefix:
+OfficeClaw supports two trigger modes (both case-insensitive):
+
+### OC: Mode (OfficeClaw Agent)
+Uses the OfficeClaw agent with custom tools (file access, task execution, messaging):
 
 ```
-OfficeClaw: <task_name> <message body>
+OC: <task_name> <message body>
 ```
 
 Examples:
-- `OfficeClaw: help me find files containing "TODO"`
-- `OfficeClaw: summarize_files check the logs directory`
-- `OfficeClaw: what's in my Documents folder?`
+- `OC: help me find files containing "TODO"`
+- `OC: summarize_files check the logs directory`
+- `OC: what's in my Documents folder?`
 
 If no task name is provided, the `default_task` is used.
+
+### OCC: Mode (Claude CLI Agent)
+Invokes Claude CLI directly as an autonomous agent with auto-approval of all tool requests.
+Claude runs in the configured `claude_working_folder` with full tool access.
+
+```
+OCC: <request>
+```
+
+Examples:
+- `OCC: refactor the main.go file`
+- `OCC: analyze this codebase and suggest improvements`
+- `OCC: help me debug the failing tests`
+
+This mode bypasses the OfficeClaw agent and gives Claude CLI full autonomy.

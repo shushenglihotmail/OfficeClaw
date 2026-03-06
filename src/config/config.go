@@ -23,8 +23,12 @@ type Config struct {
 type WhatsAppConfig struct {
 	// Path to SQLite database for session storage
 	DatabasePath string `yaml:"database_path"`
-	// Trigger prefix (e.g., "OfficeClaw:")
+	// Trigger prefix for OfficeClaw agent (e.g., "OC:")
 	TriggerPrefix string `yaml:"trigger_prefix"`
+	// Trigger prefix for Claude CLI agent (e.g., "OCC:")
+	ClaudeTrigger string `yaml:"claude_trigger"`
+	// Working folder for Claude CLI agent
+	ClaudeWorkingFolder string `yaml:"claude_working_folder"`
 	// Default task when none specified in message
 	DefaultTask string `yaml:"default_task"`
 }
@@ -191,8 +195,12 @@ func applyDefaults(cfg *Config) {
 		cfg.WhatsApp.DatabasePath = "whatsapp.db"
 	}
 	if cfg.WhatsApp.TriggerPrefix == "" {
-		cfg.WhatsApp.TriggerPrefix = "OfficeClaw:"
+		cfg.WhatsApp.TriggerPrefix = "OC:"
 	}
+	if cfg.WhatsApp.ClaudeTrigger == "" {
+		cfg.WhatsApp.ClaudeTrigger = "OCC:"
+	}
+	// ClaudeWorkingFolder defaults to current directory if not set
 	if cfg.WhatsApp.DefaultTask == "" {
 		cfg.WhatsApp.DefaultTask = "assist"
 	}
