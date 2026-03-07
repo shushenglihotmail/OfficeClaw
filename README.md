@@ -32,6 +32,8 @@ OCC: help me debug the failing test
 ```
 Claude CLI runs in the configured `claude_working_folder` with full tool access.
 
+**Persistent Session**: The session maintains context across messages. Send `OCC: reset` to clear context and start fresh.
+
 Both triggers are **case-insensitive** (e.g., `oc:`, `OC:`, `Oc:` all work).
 
 ## Quick Start

@@ -14,6 +14,10 @@ whatsapp:
   # Working folder for Claude CLI agent (used with OCC: trigger)
   # Claude will execute with this as its working directory
   claude_working_folder: "C:\\Projects\\MyRepo"
+  # Keyword to reset the Claude CLI session and clear conversation context
+  # Send "OCC: reset" to restart the session (case-insensitive)
+  # The session persists across messages, maintaining context until reset
+  claude_session_reset_keyword: "reset"
   # Default task when none specified in message
   default_task: "assist"
 

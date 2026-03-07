@@ -124,19 +124,20 @@ func main() {
 	})
 	logger.Printf("WhatsApp listener active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
 
-	// Initialize Claude CLI agent for direct Claude mode
+	// Initialize Claude CLI agent for direct Claude mode (persistent session)
 	claudeAgent, err := agent.NewClaudeAgent(agent.ClaudeAgentConfig{
 		CLIPath:       cfg.LLM.Anthropic.CLIPath,
 		WorkingFolder: cfg.WhatsApp.ClaudeWorkingFolder,
 		WAClient:      waClient,
 		Logger:        logger,
+		ResetKeyword:  cfg.WhatsApp.ClaudeSessionResetKeyword,
 	})
 	if err != nil {
 		logger.Printf("Warning: Claude CLI agent not available: %v", err)
 	} else {
 		waClient.SetClaudeHandler(claudeAgent.HandleMessage)
-		logger.Printf("Claude CLI agent active (trigger: %s, folder: %s)",
-			cfg.WhatsApp.ClaudeTrigger, cfg.WhatsApp.ClaudeWorkingFolder)
+		logger.Printf("Claude CLI agent active (trigger: %s, folder: %s, reset: %q)",
+			cfg.WhatsApp.ClaudeTrigger, cfg.WhatsApp.ClaudeWorkingFolder, cfg.WhatsApp.ClaudeSessionResetKeyword)
 	}
 
 	// Start task scheduler
@@ -149,6 +150,9 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		logger.Printf("Shutdown signal received")
+		if claudeAgent != nil {
+			claudeAgent.Stop()
+		}
 		waClient.Disconnect()
 		cancel()
 	}()

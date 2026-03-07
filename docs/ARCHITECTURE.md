@@ -42,7 +42,7 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 │           ├── "OCC:" ─────┐                                    │
 │           │               ▼                                    │
 │           │     ┌─────────────────┐                            │
-│           │     │  Claude Agent   │   (direct CLI invocation)  │
+│           │     │  Claude Agent   │   (session via --resume)   │
 │           │     │  (auto-approval)│                            │
 │           │     └────────┬────────┘                            │
 │           │              │                                     │
@@ -89,12 +89,18 @@ Uses the custom OfficeClaw agent with tool orchestration:
 7. Steps 4-6 repeat until the LLM provides a final text response (max 20 rounds)
 
 ### OCC: Mode (Claude CLI Agent)
-Invokes Claude CLI directly as an autonomous agent:
+Invokes Claude CLI directly as an autonomous agent with **session persistence via `--resume`**:
 1. WhatsApp listener detects a message starting with "OCC:"
-2. Claude CLI is spawned with `--dangerously-skip-permissions` (auto-approval)
+2. Claude CLI is spawned with `-p --dangerously-skip-permissions --resume <session-id>`
 3. Claude CLI runs in the configured `claude_working_folder`
 4. Claude executes autonomously using its built-in tools
 5. Final response is sent back via WhatsApp
+6. **Session ID is preserved** - subsequent OCC: messages use the same session ID to maintain context
+
+**Session Management**:
+- Each request spawns a new CLI process but uses `--resume` with the same session ID
+- This maintains conversation context across requests
+- Send `OCC: reset` (or configured keyword) to get a new session ID and start fresh
 
 The OCC: mode bypasses the OfficeClaw agent loop entirely, giving Claude CLI full control with all permissions auto-approved.
 

@@ -200,11 +200,14 @@ func (c *Client) handleMessage(msg *events.Message) {
 	var handler MessageHandler
 
 	c.mu.RLock()
-	if strings.HasPrefix(textLower, strings.ToLower(c.claudeTrigger)) {
+	claudeTriggerLower := strings.ToLower(c.claudeTrigger)
+	triggerPrefixLower := strings.ToLower(c.triggerPrefix)
+
+	if strings.HasPrefix(textLower, claudeTriggerLower) {
 		mode = ModeClaude
 		prefix = c.claudeTrigger
 		handler = c.claudeHandler
-	} else if strings.HasPrefix(textLower, strings.ToLower(c.triggerPrefix)) {
+	} else if strings.HasPrefix(textLower, triggerPrefixLower) {
 		mode = ModeOfficeClaw
 		prefix = c.triggerPrefix
 		handler = c.handler

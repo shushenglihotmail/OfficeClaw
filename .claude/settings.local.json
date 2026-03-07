@@ -9,7 +9,9 @@
       "Bash(go test:*)",
       "Bash(go get:*)",
       "Bash(go mod tidy:*)",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd session persistence to OCC: mode using --resume\n\n- OCC: mode now maintains conversation context across messages\n- Uses Claude CLI --resume flag with session ID for context persistence\n- First request creates session, subsequent requests use --resume\n- Send \"OCC: reset\" to clear context and start a new session\n- Add claude_session_reset_keyword config option \\(default: \"reset\"\\)\n- Update documentation for session persistence feature\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

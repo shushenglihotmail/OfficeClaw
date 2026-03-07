@@ -9,6 +9,7 @@ whatsapp:
   trigger_prefix: "OC:"           # Prefix for OfficeClaw agent mode
   claude_trigger: "OCC:"          # Prefix for direct Claude CLI agent mode
   claude_working_folder: "C:\\Projects\\MyRepo"  # Working folder for Claude CLI
+  claude_session_reset_keyword: "reset"  # Keyword to reset session (e.g., "OCC: reset")
   default_task: "assist"          # Task when none specified in OC: trigger
 
 # LLM provider
@@ -183,6 +184,8 @@ If no task name is provided, the `default_task` is used.
 Invokes Claude CLI directly as an autonomous agent with auto-approval of all tool requests.
 Claude runs in the configured `claude_working_folder` with full tool access.
 
+**Session Persistence**: Uses `--resume <session-id>` to maintain conversation context across messages. Each request spawns a new CLI process but uses the same session ID, so Claude remembers previous messages.
+
 ```
 OCC: <request>
 ```
@@ -191,5 +194,14 @@ Examples:
 - `OCC: refactor the main.go file`
 - `OCC: analyze this codebase and suggest improvements`
 - `OCC: help me debug the failing tests`
+- `OCC: remember my name is Bob` → later: `OCC: what's my name?` (remembers "Bob")
+
+**Resetting the Session**: Send the reset keyword to get a new session ID and start fresh:
+```
+OCC: reset
+```
+Response: "Session restarted. Conversation context has been cleared."
+
+The reset keyword is configurable via `claude_session_reset_keyword` (default: "reset").
 
 This mode bypasses the OfficeClaw agent and gives Claude CLI full autonomy.

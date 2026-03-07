@@ -29,6 +29,8 @@ type WhatsAppConfig struct {
 	ClaudeTrigger string `yaml:"claude_trigger"`
 	// Working folder for Claude CLI agent
 	ClaudeWorkingFolder string `yaml:"claude_working_folder"`
+	// Keyword to reset Claude CLI session (e.g., send "OCC: reset")
+	ClaudeSessionResetKeyword string `yaml:"claude_session_reset_keyword"`
 	// Default task when none specified in message
 	DefaultTask string `yaml:"default_task"`
 }
@@ -199,6 +201,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.WhatsApp.ClaudeTrigger == "" {
 		cfg.WhatsApp.ClaudeTrigger = "OCC:"
+	}
+	if cfg.WhatsApp.ClaudeSessionResetKeyword == "" {
+		cfg.WhatsApp.ClaudeSessionResetKeyword = "reset"
 	}
 	// ClaudeWorkingFolder defaults to current directory if not set
 	if cfg.WhatsApp.DefaultTask == "" {
