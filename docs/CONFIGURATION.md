@@ -205,3 +205,64 @@ Response: "Session restarted. Conversation context has been cleared."
 The reset keyword is configurable via `claude_session_reset_keyword` (default: "reset").
 
 This mode bypasses the OfficeClaw agent and gives Claude CLI full autonomy.
+
+## MCP Server (Model Context Protocol)
+
+OfficeClaw includes an MCP server that exposes its custom tools to Claude CLI. This allows Claude to use OfficeClaw tools (read_file, execute_task, vpn_control) alongside its native tools.
+
+### Running the MCP Server
+
+The MCP server runs as a subprocess of Claude CLI using stdio transport:
+
+```bash
+officeclaw.exe mcp serve
+```
+
+The server reads configuration from `config.yaml` (or path specified by `CONFIG_PATH` environment variable).
+
+### Configuring Claude CLI
+
+Add the MCP server to your Claude CLI configuration:
+
+**Option 1: Using claude mcp add command**
+```bash
+claude mcp add --transport stdio officeclaw -- C:\path\to\officeclaw.exe mcp serve
+```
+
+**Option 2: Manual configuration in ~/.claude.json**
+```json
+{
+  "mcpServers": {
+    "officeclaw": {
+      "type": "stdio",
+      "command": "C:\\path\\to\\officeclaw.exe",
+      "args": ["mcp", "serve"],
+      "env": {
+        "CONFIG_PATH": "C:\\path\\to\\config.yaml"
+      }
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read files from allowed directories (respects `tools.file_access.allowed_paths`) |
+| `execute_task` | Execute predefined tasks from config |
+| `vpn_control` | Connect/disconnect VPN, check status |
+
+**Note**: The `send_message` tool requires an active WhatsApp connection and is only available when running the full OfficeClaw application, not in standalone MCP mode.
+
+### Verifying MCP Server
+
+Test that the MCP server is working:
+
+```bash
+# List available tools
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | officeclaw.exe mcp serve
+
+# In Claude CLI, check MCP status
+/mcp
+```

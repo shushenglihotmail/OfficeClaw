@@ -18,6 +18,9 @@ make build-console          # Outputs to build/officeclaw.exe
 # Run directly in development
 make run                    # Equivalent to: go run ./src
 
+# Run MCP server (for Claude CLI integration)
+./build/officeclaw.exe mcp serve
+
 # Run tests
 make test                   # Run all tests in test/
 make test-coverage          # Generate coverage.html
@@ -60,14 +63,18 @@ See `agent/claude_agent.go` for implementation.
 
 ### Package Responsibilities
 
-- **main.go**: Dependency injection, startup sequence, signal handling
+- **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand
 - **agent/**: Core orchestration loop, prompt building, conversation management
+  - `claude_agent.go`: OCC: mode - Claude CLI integration with session persistence
 - **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI), unified message format
 - **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
   - `messaging.go`: WhatsApp reply tool
   - `fileaccess.go`: Local file read tool (path-whitelisted)
   - `taskexec.go`: Predefined task execution (only tasks in config are allowed)
   - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
+- **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
+  - `server.go`: JSON-RPC stdio server implementation
+  - `protocol.go`: MCP and JSON-RPC type definitions
 - **whatsapp/**: WhatsApp Web integration via whatsmeow library
 - **tasks/**: Task registry, executor with timeout, cron scheduler
 - **config/**: YAML config loading with environment variable overrides

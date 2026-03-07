@@ -13,6 +13,7 @@ import (
 	"github.com/officeclaw/src/agent"
 	"github.com/officeclaw/src/config"
 	"github.com/officeclaw/src/llm"
+	"github.com/officeclaw/src/mcp"
 	"github.com/officeclaw/src/tasks"
 	"github.com/officeclaw/src/telemetry"
 	"github.com/officeclaw/src/tools"
@@ -21,6 +22,12 @@ import (
 )
 
 func main() {
+	// Check for MCP subcommand before flag parsing
+	if len(os.Args) >= 3 && os.Args[1] == "mcp" && os.Args[2] == "serve" {
+		runMCPServer()
+		return
+	}
+
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
@@ -184,4 +191,66 @@ func setupLogging(cfg config.LoggingConfig) *log.Logger {
 	}
 
 	return log.New(output, "[OfficeClaw] ", log.LstdFlags|log.Lmsgprefix)
+}
+
+// runMCPServer runs the MCP server in standalone mode.
+// This is used when OfficeClaw is spawned by Claude CLI as an MCP server.
+func runMCPServer() {
+	// MCP uses stdio for communication, so logs go to stderr
+	logger := log.New(os.Stderr, "[mcp] ", log.LstdFlags|log.Lmsgprefix)
+
+	// Load config from environment variable or default path
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		logger.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize task registry (for execute_task tool)
+	taskRegistry := tasks.NewRegistry()
+	for name, taskCfg := range cfg.Tasks {
+		taskRegistry.Register(name, taskCfg)
+	}
+	taskExecutor := tasks.NewExecutor(taskRegistry, logger)
+
+	// Initialize tool registry with tools that don't require WhatsApp
+	toolRegistry := tools.NewRegistry()
+
+	if cfg.Tools.FileAccess.Enabled {
+		toolRegistry.Register(tools.NewFileAccessTool(cfg.Tools.FileAccess))
+	}
+	if cfg.Tools.TaskExecution.Enabled {
+		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor))
+	}
+	if cfg.Tools.VPN.Enabled {
+		toolRegistry.Register(tools.NewVPNTool(cfg.Tools.VPN))
+	}
+
+	// Note: send_message tool requires WhatsApp client which isn't available in standalone mode
+	// For full tool access, run OfficeClaw normally and use OCC: mode
+
+	logger.Printf("MCP server starting with %d tools", toolRegistry.Count())
+
+	// Create and run MCP server
+	server := mcp.NewServer(toolRegistry, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle shutdown signals
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		logger.Println("Shutdown signal received")
+		cancel()
+	}()
+
+	if err := server.Run(ctx); err != nil {
+		logger.Fatalf("MCP server error: %v", err)
+	}
 }
