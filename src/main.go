@@ -88,19 +88,29 @@ func main() {
 	// Initialize tool registry
 	toolRegistry := tools.NewRegistry()
 
-	// Register built-in tools
+	// Create task execution tool (needs WhatsApp client for async notifications)
+	var taskExecTool *tools.TaskExecutionTool
+	if cfg.Tools.TaskExecution.Enabled {
+		taskExecTool = tools.NewTaskExecutionTool(taskExecutor, waClient)
+		toolRegistry.Register(taskExecTool)
+	}
+
+	// Register other built-in tools
 	if cfg.Tools.Messaging.Enabled {
 		toolRegistry.Register(tools.NewMessagingTool(waClient))
 	}
 	if cfg.Tools.FileAccess.Enabled {
 		toolRegistry.Register(tools.NewFileAccessTool(cfg.Tools.FileAccess))
 	}
-	if cfg.Tools.TaskExecution.Enabled {
-		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor))
-	}
 	if cfg.Tools.VPN.Enabled {
 		toolRegistry.Register(tools.NewVPNTool(cfg.Tools.VPN))
 	}
+
+	// Task log viewing tool (always enabled if task execution is enabled)
+	if cfg.Tools.TaskExecution.Enabled {
+		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
+	}
+
 	logger.Printf("Tool registry initialized (%d tools registered)", toolRegistry.Count())
 
 	// Create the core agent
@@ -118,6 +128,11 @@ func main() {
 
 	// Bridge WhatsApp messages to OfficeClaw agent
 	waClient.SetMessageHandler(func(ctx context.Context, msg whatsapp.IncomingMessage) {
+		// Set chat JID for async task notifications
+		if taskExecTool != nil {
+			taskExecTool.SetChatJID(msg.ChatJID)
+		}
+
 		agentInstance.HandleMessage(ctx, agent.IncomingMessage{
 			Source:    "whatsapp",
 			SenderID:  msg.SenderJID,
@@ -224,10 +239,17 @@ func runMCPServer() {
 		toolRegistry.Register(tools.NewFileAccessTool(cfg.Tools.FileAccess))
 	}
 	if cfg.Tools.TaskExecution.Enabled {
-		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor))
+		// In MCP mode, no WhatsApp client available, so pass nil
+		// Async notifications won't work, but sync execution will
+		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor, nil))
 	}
 	if cfg.Tools.VPN.Enabled {
 		toolRegistry.Register(tools.NewVPNTool(cfg.Tools.VPN))
+	}
+
+	// Task log viewing tool (always enabled if task execution is enabled)
+	if cfg.Tools.TaskExecution.Enabled {
+		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
 	}
 
 	// Note: send_message tool requires WhatsApp client which isn't available in standalone mode

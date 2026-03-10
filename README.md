@@ -7,8 +7,9 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 - **24/7 Background Agent**: Runs as a Windows desktop app with system tray icon
 - **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web
 - **Multi-Provider LLM**: Claude (via CLI with SSO), Azure OpenAI, OpenAI — extensible to more
-- **Extensible Tool System**: Reply to messages, read local files, execute tasks, manage VPN
-- **Task Execution Engine**: Predefined tasks with timeout, logging, and LLM reporting
+- **Extensible Tool System**: Reply to messages, read local files, execute tasks, view task logs, manage VPN
+- **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and WhatsApp notifications
+- **MCP Server**: Exposes OfficeClaw tools to Claude CLI for seamless integration
 - **Observability**: OpenTelemetry + Prometheus metrics
 
 ## How It Works
@@ -29,8 +30,9 @@ Invokes Claude CLI directly as an autonomous agent with auto-approval of all too
 OCC: refactor the main.go file to use dependency injection
 OCC: analyze this codebase and suggest improvements
 OCC: help me debug the failing test
+OCC: show me the logs from the last setupbuild task
 ```
-Claude CLI runs in the configured `claude_working_folder` with full tool access.
+Claude CLI runs in the configured `claude_working_folder` with full tool access. OfficeClaw automatically configures itself as an MCP server, giving Claude access to OfficeClaw tools (task execution, file access, task logs, VPN) alongside its native tools.
 
 **Persistent Session**: The session maintains context across messages. Send `OCC: reset` to clear context and start fresh.
 

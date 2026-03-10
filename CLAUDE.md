@@ -50,15 +50,16 @@ OfficeClaw supports two operating modes triggered by different prefixes (both ca
    - Repeat until LLM returns text with no tool calls
 
 ### OCC: Mode (Claude CLI Agent)
-**Direct invocation**: WhatsApp Listener → Claude CLI (with auto-approval)
+**Direct invocation**: WhatsApp Listener → Claude CLI (with auto-approval + MCP tools)
 
 1. WhatsApp listener detects message starting with "OCC:"
 2. Claude CLI spawned with `--dangerously-skip-permissions` (auto-approval)
-3. Claude runs in `whatsapp.claude_working_folder` with full tool access
-4. Claude executes autonomously using its built-in tools
-5. Final response sent back via WhatsApp
+3. OfficeClaw automatically configures itself as an MCP server for the Claude CLI session
+4. Claude runs in `whatsapp.claude_working_folder` with full tool access (native + OfficeClaw tools via MCP)
+5. Claude executes autonomously using both its built-in tools and OfficeClaw's tools
+6. Final response sent back via WhatsApp
 
-This mode bypasses OfficeClaw's agent loop entirely, giving Claude CLI full autonomy.
+This mode gives Claude CLI full autonomy while still providing access to OfficeClaw tools (task execution, file access, task logs, VPN control) via MCP.
 See `agent/claude_agent.go` for implementation.
 
 ### Package Responsibilities
@@ -70,7 +71,8 @@ See `agent/claude_agent.go` for implementation.
 - **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
   - `messaging.go`: WhatsApp reply tool
   - `fileaccess.go`: Local file read tool (path-whitelisted)
-  - `taskexec.go`: Predefined task execution (only tasks in config are allowed)
+  - `taskexec.go`: Predefined task execution with async support (only tasks in config are allowed)
+  - `tasklog.go`: View task execution logs (running tasks, recent logs, read log contents)
   - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
 - **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
   - `server.go`: JSON-RPC stdio server implementation

@@ -4,14 +4,19 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/officeclaw/src/config"
 	"github.com/officeclaw/src/telemetry"
 )
@@ -32,6 +37,16 @@ type TaskResult struct {
 	Error     string        `json:"error,omitempty"`
 	Duration  time.Duration `json:"duration"`
 	StartedAt time.Time     `json:"started_at"`
+	LogFile   string        `json:"log_file,omitempty"` // Path to task output log file
+}
+
+// RunningTask tracks an async task execution.
+type RunningTask struct {
+	ID        string
+	TaskName  string
+	StartTime time.Time
+	LogFile   string
+	Cancel    context.CancelFunc
 }
 
 // String returns a human-readable summary of the result.
@@ -40,6 +55,9 @@ func (r *TaskResult) String() string {
 	sb.WriteString(fmt.Sprintf("Task: %s\n", r.TaskName))
 	sb.WriteString(fmt.Sprintf("Status: %s\n", r.Status))
 	sb.WriteString(fmt.Sprintf("Duration: %s\n", r.Duration.Round(time.Millisecond)))
+	if r.LogFile != "" {
+		sb.WriteString(fmt.Sprintf("Log file: %s\n", r.LogFile))
+	}
 	if r.Output != "" {
 		sb.WriteString(fmt.Sprintf("Output:\n%s\n", r.Output))
 	}
@@ -47,6 +65,19 @@ func (r *TaskResult) String() string {
 		sb.WriteString(fmt.Sprintf("Error: %s\n", r.Error))
 	}
 	return sb.String()
+}
+
+// TailOutput returns the last n lines of output.
+func (r *TaskResult) TailOutput(n int) string {
+	if r.Output == "" {
+		return ""
+	}
+	lines := strings.Split(r.Output, "\n")
+	start := len(lines) - n
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(lines[start:], "\n")
 }
 
 // Registry manages task definitions.
@@ -100,10 +131,12 @@ func (r *Registry) List() []TaskInfo {
 
 // Executor runs tasks with timeout, logging, and metrics.
 type Executor struct {
-	registry  *Registry
-	logger    *log.Logger
-	mu        sync.Mutex
-	scheduled map[string]*scheduledTask
+	registry     *Registry
+	logger       *log.Logger
+	logDirectory string
+	mu           sync.Mutex
+	scheduled    map[string]*scheduledTask
+	running      map[string]*RunningTask // Track running async tasks
 }
 
 type scheduledTask struct {
@@ -113,17 +146,136 @@ type scheduledTask struct {
 }
 
 // NewExecutor creates a task executor.
+// Task logs are stored in the "logs" subdirectory under the current working directory.
 func NewExecutor(registry *Registry, logger *log.Logger) *Executor {
-	return &Executor{
-		registry:  registry,
-		logger:    logger,
-		scheduled: make(map[string]*scheduledTask),
+	logDirectory := "logs"
+	// Ensure log directory exists
+	if err := os.MkdirAll(logDirectory, 0755); err != nil {
+		logger.Printf("[task] Warning: could not create log directory %s: %v", logDirectory, err)
 	}
+	return &Executor{
+		registry:     registry,
+		logger:       logger,
+		logDirectory: logDirectory,
+		scheduled:    make(map[string]*scheduledTask),
+		running:      make(map[string]*RunningTask),
+	}
+}
+
+// GetTask returns a task definition by name.
+func (e *Executor) GetTask(name string) (config.Task, bool) {
+	return e.registry.Get(name)
+}
+
+// ListRunningTasks returns info about currently running async tasks.
+func (e *Executor) ListRunningTasks() []*RunningTask {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	result := make([]*RunningTask, 0, len(e.running))
+	for _, rt := range e.running {
+		result = append(result, rt)
+	}
+	return result
+}
+
+// LogDirectory returns the path to the task log directory.
+func (e *Executor) LogDirectory() string {
+	return e.logDirectory
+}
+
+// TaskLogFile holds information about a task log file.
+type TaskLogFile struct {
+	TaskName  string
+	FilePath  string
+	Timestamp time.Time
+	Size      int64
+}
+
+// FindLogFiles finds log files for a task, optionally filtered by time range.
+// If taskName is empty, returns logs for all tasks.
+// If startTime/endTime are zero, no time filtering is applied.
+func (e *Executor) FindLogFiles(taskName string, startTime, endTime time.Time) ([]TaskLogFile, error) {
+	pattern := filepath.Join(e.logDirectory, "*.log")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("listing log files: %w", err)
+	}
+
+	var results []TaskLogFile
+	for _, f := range files {
+		base := filepath.Base(f)
+		// Parse filename: <task-name>-<YYYYMMDD-HHMMSS>.log
+		ext := filepath.Ext(base)
+		name := strings.TrimSuffix(base, ext)
+
+		// Find the timestamp part (last 15 chars: YYYYMMDD-HHMMSS)
+		if len(name) < 16 {
+			continue
+		}
+		timestampStr := name[len(name)-15:]
+		taskPart := name[:len(name)-16] // -1 for the dash before timestamp
+
+		// Filter by task name if specified
+		if taskName != "" && taskPart != taskName {
+			continue
+		}
+
+		// Parse timestamp
+		ts, err := time.ParseInLocation("20060102-150405", timestampStr, time.Local)
+		if err != nil {
+			continue
+		}
+
+		// Filter by time range if specified
+		if !startTime.IsZero() && ts.Before(startTime) {
+			continue
+		}
+		if !endTime.IsZero() && ts.After(endTime) {
+			continue
+		}
+
+		// Get file size
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+
+		results = append(results, TaskLogFile{
+			TaskName:  taskPart,
+			FilePath:  f,
+			Timestamp: ts,
+			Size:      info.Size(),
+		})
+	}
+
+	// Sort by timestamp descending (most recent first)
+	for i := 0; i < len(results)-1; i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Timestamp.After(results[i].Timestamp) {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+
+	return results, nil
 }
 
 // ListTasks returns info for all tasks (used by TaskExecutionTool).
 func (e *Executor) ListTasks() []TaskInfo {
 	return e.registry.List()
+}
+
+// createTaskLogFile creates a log file for task output.
+func (e *Executor) createTaskLogFile(taskName string) (*os.File, string, error) {
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("%s-%s.log", taskName, timestamp)
+	filepath := filepath.Join(e.logDirectory, filename)
+
+	file, err := os.Create(filepath)
+	if err != nil {
+		return nil, "", fmt.Errorf("creating task log file: %w", err)
+	}
+	return file, filepath, nil
 }
 
 // Execute runs a task by name with timeout enforcement.
@@ -150,15 +302,43 @@ func (e *Executor) Execute(ctx context.Context, taskName string, params map[stri
 	}
 
 	if taskDef.Command != "" {
-		// Execute shell command
-		output, err := e.executeCommand(taskCtx, taskDef.Command)
+		// Create task log file for streaming output
+		logFile, logPath, err := e.createTaskLogFile(taskName)
+		if err != nil {
+			e.logger.Printf("[task] Warning: could not create log file: %v", err)
+		} else {
+			result.LogFile = logPath
+			defer logFile.Close()
+			// Write header to log file
+			fmt.Fprintf(logFile, "=== Task: %s ===\n", taskName)
+			fmt.Fprintf(logFile, "Started: %s\n", startTime.Format(time.RFC3339))
+			fmt.Fprintf(logFile, "Command: %s\n", taskDef.Command)
+			fmt.Fprintf(logFile, "Timeout: %s\n", timeout)
+			fmt.Fprintf(logFile, "=== Output ===\n")
+		}
+
+		// Execute shell command with streaming output
+		output, err := e.executeCommand(taskCtx, taskName, taskDef.Command, logFile)
 		result.Duration = time.Since(startTime)
 		result.Output = output
+
+		// Write footer to log file
+		if logFile != nil {
+			fmt.Fprintf(logFile, "\n=== Completed ===\n")
+			fmt.Fprintf(logFile, "Duration: %s\n", result.Duration)
+			if taskCtx.Err() == context.DeadlineExceeded {
+				fmt.Fprintf(logFile, "Status: TIMEOUT\n")
+			} else if err != nil {
+				fmt.Fprintf(logFile, "Status: ERROR - %v\n", err)
+			} else {
+				fmt.Fprintf(logFile, "Status: SUCCESS\n")
+			}
+		}
 
 		if taskCtx.Err() == context.DeadlineExceeded {
 			result.Status = "timeout"
 			result.Error = fmt.Sprintf("task exceeded timeout of %s", timeout)
-			e.logger.Printf("[task] Task '%s' TIMEOUT after %s", taskName, result.Duration)
+			e.logger.Printf("[task] Task '%s' TIMEOUT after %s (log: %s)", taskName, result.Duration, logPath)
 			telemetry.RecordTaskExecution(ctx, taskName, "timeout", result.Duration.Seconds())
 			return result, nil
 		}
@@ -166,31 +346,177 @@ func (e *Executor) Execute(ctx context.Context, taskName string, params map[stri
 		if err != nil {
 			result.Status = "error"
 			result.Error = err.Error()
-			e.logger.Printf("[task] Task '%s' FAILED: %v", taskName, err)
+			e.logger.Printf("[task] Task '%s' FAILED: %v (log: %s)", taskName, err, logPath)
 			telemetry.RecordTaskExecution(ctx, taskName, "error", result.Duration.Seconds())
 			return result, nil
 		}
 
 		result.Status = "success"
+		e.logger.Printf("[task] Task '%s' completed in %s (log: %s)", taskName, result.Duration, logPath)
 	} else {
 		// No command — this is an LLM-driven task (e.g., "assist", "summarize_inbox")
 		result.Status = "success"
 		result.Output = fmt.Sprintf("Task '%s' is an LLM-driven task: %s", taskName, taskDef.Description)
 		result.Duration = time.Since(startTime)
+		e.logger.Printf("[task] Task '%s' completed in %s", taskName, result.Duration)
 	}
 
-	e.logger.Printf("[task] Task '%s' completed in %s", taskName, result.Duration)
 	telemetry.RecordTaskExecution(ctx, taskName, result.Status, result.Duration.Seconds())
 	return result, nil
 }
 
-// executeCommand runs a shell command and captures output.
-func (e *Executor) executeCommand(ctx context.Context, command string) (string, error) {
-	// Use PowerShell on Windows
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", command)
+// ExecuteAsync runs a task asynchronously and calls onComplete when done.
+// Returns the task ID and log file path immediately.
+func (e *Executor) ExecuteAsync(ctx context.Context, taskName string, params map[string]interface{},
+	onComplete func(*TaskResult)) (string, string, error) {
 
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	taskDef, ok := e.registry.Get(taskName)
+	if !ok {
+		return "", "", fmt.Errorf("unknown task: %s", taskName)
+	}
+
+	// Generate task ID
+	taskID := uuid.New().String()[:8]
+
+	// Create log file
+	logFile, logPath, err := e.createTaskLogFile(taskName)
+	if err != nil {
+		return "", "", fmt.Errorf("creating log file: %w", err)
+	}
+
+	timeout := time.Duration(taskDef.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+
+	// Create cancellable context for async execution
+	asyncCtx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	// Track running task
+	e.mu.Lock()
+	e.running[taskID] = &RunningTask{
+		ID:        taskID,
+		TaskName:  taskName,
+		StartTime: time.Now(),
+		LogFile:   logPath,
+		Cancel:    cancel,
+	}
+	e.mu.Unlock()
+
+	e.logger.Printf("[task] Starting async task '%s' (id: %s, timeout: %s, log: %s)", taskName, taskID, timeout, logPath)
+
+	// Write header to log file
+	fmt.Fprintf(logFile, "=== Task: %s (async) ===\n", taskName)
+	fmt.Fprintf(logFile, "Task ID: %s\n", taskID)
+	fmt.Fprintf(logFile, "Started: %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(logFile, "Command: %s\n", taskDef.Command)
+	fmt.Fprintf(logFile, "Timeout: %s\n", timeout)
+	fmt.Fprintf(logFile, "=== Output ===\n")
+
+	// Run in background
+	go func() {
+		defer logFile.Close()
+		defer cancel()
+
+		// Remove from running when done
+		defer func() {
+			e.mu.Lock()
+			delete(e.running, taskID)
+			e.mu.Unlock()
+		}()
+
+		startTime := time.Now()
+		result := &TaskResult{
+			TaskName:  taskName,
+			StartedAt: startTime,
+			LogFile:   logPath,
+		}
+
+		if taskDef.Command != "" {
+			output, err := e.executeCommand(asyncCtx, taskName, taskDef.Command, logFile)
+			result.Duration = time.Since(startTime)
+			result.Output = output
+
+			// Write footer to log file
+			fmt.Fprintf(logFile, "\n=== Completed ===\n")
+			fmt.Fprintf(logFile, "Duration: %s\n", result.Duration)
+
+			if asyncCtx.Err() == context.DeadlineExceeded {
+				result.Status = "timeout"
+				result.Error = fmt.Sprintf("task exceeded timeout of %s", timeout)
+				fmt.Fprintf(logFile, "Status: TIMEOUT\n")
+				e.logger.Printf("[task] Async task '%s' (id: %s) TIMEOUT after %s", taskName, taskID, result.Duration)
+				telemetry.RecordTaskExecution(ctx, taskName, "timeout", result.Duration.Seconds())
+			} else if err != nil {
+				result.Status = "error"
+				result.Error = err.Error()
+				fmt.Fprintf(logFile, "Status: ERROR - %v\n", err)
+				e.logger.Printf("[task] Async task '%s' (id: %s) FAILED: %v", taskName, taskID, err)
+				telemetry.RecordTaskExecution(ctx, taskName, "error", result.Duration.Seconds())
+			} else {
+				result.Status = "success"
+				fmt.Fprintf(logFile, "Status: SUCCESS\n")
+				e.logger.Printf("[task] Async task '%s' (id: %s) completed in %s", taskName, taskID, result.Duration)
+				telemetry.RecordTaskExecution(ctx, taskName, result.Status, result.Duration.Seconds())
+			}
+		} else {
+			result.Status = "success"
+			result.Output = fmt.Sprintf("Task '%s' is an LLM-driven task: %s", taskName, taskDef.Description)
+			result.Duration = time.Since(startTime)
+		}
+
+		// Call completion callback
+		if onComplete != nil {
+			onComplete(result)
+		}
+	}()
+
+	return taskID, logPath, nil
+}
+
+// executeCommand runs a shell command and streams output to the log file.
+func (e *Executor) executeCommand(ctx context.Context, taskName, command string, logFile *os.File) (string, error) {
+	var cmd *exec.Cmd
+
+	// Detect if command is a .ps1 script file
+	// If it starts with a path to a .ps1 file, use pwsh -File
+	// Otherwise use pwsh -Command
+	trimmedCmd := strings.TrimSpace(command)
+	if strings.HasSuffix(strings.ToLower(strings.Fields(trimmedCmd)[0]), ".ps1") ||
+		strings.Contains(trimmedCmd, ".ps1 ") ||
+		strings.HasPrefix(trimmedCmd, "-File") {
+		// It's a script file - use pwsh -File (more reliable for scripts)
+		if strings.HasPrefix(trimmedCmd, "-File") {
+			// Already has -File flag
+			cmd = exec.CommandContext(ctx, "pwsh", "-NoProfile", trimmedCmd)
+		} else {
+			// Prepend -File flag
+			cmd = exec.CommandContext(ctx, "pwsh", "-NoProfile", "-File", trimmedCmd)
+		}
+	} else {
+		// Regular command - use pwsh -Command
+		cmd = exec.CommandContext(ctx, "pwsh", "-NoProfile", "-Command", command)
+	}
+
+	// Set up output streaming
+	var outputBuf bytes.Buffer
+	var writers []io.Writer
+
+	// Always capture to buffer
+	writers = append(writers, &outputBuf)
+
+	// If log file provided, also write to it
+	if logFile != nil {
+		writers = append(writers, logFile)
+	}
+
+	multiWriter := io.MultiWriter(writers...)
+	cmd.Stdout = multiWriter
+	cmd.Stderr = multiWriter
+
+	// Run the command
+	err := cmd.Run()
+	return outputBuf.String(), err
 }
 
 // ScheduleTask registers a cron-scheduled task.

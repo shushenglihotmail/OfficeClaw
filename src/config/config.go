@@ -267,6 +267,7 @@ func applyDefaults(cfg *Config) {
 	if len(cfg.Tools.VPN.VPNNames) == 0 {
 		cfg.Tools.VPN.VPNNames = []string{"MSFT-AzVPN-Manual", "MSFTVPN-Manual"}
 	}
+
 }
 
 // Validate checks that required fields are present.

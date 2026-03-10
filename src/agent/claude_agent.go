@@ -13,21 +13,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/officeclaw/src/whatsapp"
 )
 
 // ClaudeAgent handles messages by invoking Claude CLI directly as an agent.
-// It maintains conversation context across requests using --resume with a session ID.
+// It maintains conversation context per-chat using --resume with session IDs.
+// Thread-safe for concurrent messages from different chats.
 type ClaudeAgent struct {
-	cliPath       string
-	workingFolder string
-	waClient      *whatsapp.Client
-	logger        *log.Logger
-	timeout       time.Duration
-	resetKeyword  string // Keyword to reset session (e.g., "reset")
-	sessionID     string // Session ID for --resume flag (empty until first successful call)
+	cliPath         string
+	workingFolder   string
+	officeClawPath  string // Path to OfficeClaw executable for MCP server
+	waClient        *whatsapp.Client
+	logger          *log.Logger
+	timeout         time.Duration
+	resetKeyword    string // Keyword to reset session (e.g., "reset")
+
+	// Per-chat session tracking (thread-safe)
+	sessions map[string]string // chatJID -> sessionID
+	mu       sync.RWMutex
 }
 
 // ClaudeAgentConfig holds configuration for the Claude CLI agent.
@@ -74,29 +80,58 @@ func NewClaudeAgent(cfg ClaudeAgentConfig) (*ClaudeAgent, error) {
 		resetKeyword = "reset"
 	}
 
+	// Find OfficeClaw executable path for MCP server
+	officeClawPath, err := os.Executable()
+	if err != nil {
+		cfg.Logger.Printf("[claude-agent] Warning: could not get OfficeClaw path for MCP: %v", err)
+	}
+
 	return &ClaudeAgent{
-		cliPath:       cliPath,
-		workingFolder: workingFolder,
-		waClient:      cfg.WAClient,
-		logger:        cfg.Logger,
-		timeout:       timeout,
-		resetKeyword:  resetKeyword,
-		sessionID:     "", // Empty until first successful call
+		cliPath:        cliPath,
+		workingFolder:  workingFolder,
+		officeClawPath: officeClawPath,
+		waClient:       cfg.WAClient,
+		logger:         cfg.Logger,
+		timeout:        timeout,
+		resetKeyword:   resetKeyword,
+		sessions:       make(map[string]string), // Per-chat session tracking
 	}, nil
+}
+
+// getSessionID returns the session ID for a chat (thread-safe).
+func (a *ClaudeAgent) getSessionID(chatJID string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sessions[chatJID]
+}
+
+// setSessionID stores the session ID for a chat (thread-safe).
+func (a *ClaudeAgent) setSessionID(chatJID, sessionID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessions[chatJID] = sessionID
+}
+
+// clearSession removes the session for a chat (thread-safe).
+func (a *ClaudeAgent) clearSession(chatJID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.sessions, chatJID)
 }
 
 
 // HandleMessage processes a message using Claude CLI as an autonomous agent.
-// Conversation context is maintained across messages using --resume.
-// Send the reset keyword (default: "reset") to start a new session.
+// Conversation context is maintained per-chat using --resume with session IDs.
+// Send the reset keyword (default: "reset") to start a new session for that chat.
 func (a *ClaudeAgent) HandleMessage(ctx context.Context, msg whatsapp.IncomingMessage) {
-	a.logger.Printf("[claude-agent] Processing message from %s: %s", msg.SenderJID, truncateForLog(msg.Body, 100))
+	a.logger.Printf("[claude-agent] Processing message from %s (chat: %s): %s",
+		msg.SenderJID, msg.ChatJID, truncateForLog(msg.Body, 100))
 
 	// Check for reset keyword (case-insensitive)
 	if strings.EqualFold(strings.TrimSpace(msg.Body), a.resetKeyword) {
-		oldSession := a.sessionID
-		a.sessionID = "" // Clear session - next call will start fresh
-		a.logger.Printf("[claude-agent] Session reset: %s -> (new)", oldSession)
+		oldSession := a.getSessionID(msg.ChatJID)
+		a.clearSession(msg.ChatJID)
+		a.logger.Printf("[claude-agent] Session reset for chat %s: %s -> (new)", msg.ChatJID, oldSession)
 		a.sendReply(ctx, msg.ChatJID, "Session restarted. Conversation context has been cleared.")
 		return
 	}
@@ -110,8 +145,8 @@ Message: %s
 Respond directly to the user's message.`,
 		msg.SenderJID, msg.Body)
 
-	// Execute Claude CLI with --resume to maintain session context
-	response, err := a.executeClaudeCLI(ctx, prompt)
+	// Execute Claude CLI with --resume to maintain per-chat session context
+	response, err := a.executeClaudeCLI(ctx, msg.ChatJID, prompt)
 	if err != nil {
 		a.logger.Printf("[claude-agent] CLI error: %v", err)
 		response = fmt.Sprintf("Sorry, I encountered an error: %v", err)
@@ -121,9 +156,10 @@ Respond directly to the user's message.`,
 }
 
 // executeClaudeCLI runs Claude CLI with the given prompt and returns the response.
-// Uses --resume to maintain conversation context across invocations.
-// On first call (no session), captures session ID from response for subsequent calls.
-func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, prompt string) (string, error) {
+// Uses --resume to maintain per-chat conversation context across invocations.
+// On first call (no session for this chat), captures session ID for subsequent calls.
+// Automatically configures OfficeClaw as an MCP server so Claude CLI has access to tools.
+func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, chatJID, prompt string) (string, error) {
 	args := []string{
 		"-p",                             // Print mode (non-interactive)
 		"--dangerously-skip-permissions", // Auto-approve all tool requests
@@ -131,9 +167,19 @@ func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, prompt string) (stri
 		"--verbose",                      // Required for stream-json with -p
 	}
 
-	// Only use --resume if we have an existing session
-	if a.sessionID != "" {
-		args = append(args, "--resume", a.sessionID)
+	// Add MCP server configuration if OfficeClaw path is available
+	if a.officeClawPath != "" {
+		// Create MCP config JSON to expose OfficeClaw tools to Claude CLI
+		mcpConfig := fmt.Sprintf(`{"mcpServers":{"officeclaw":{"command":"%s","args":["mcp","serve"]}}}`,
+			strings.ReplaceAll(a.officeClawPath, `\`, `\\`)) // Escape backslashes for JSON
+		args = append(args, "--mcp-config", mcpConfig)
+		a.logger.Printf("[claude-agent] MCP server configured: %s", a.officeClawPath)
+	}
+
+	// Only use --resume if we have an existing session for this chat
+	sessionID := a.getSessionID(chatJID)
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
 	}
 
 	workDir := a.workingFolder
@@ -141,11 +187,11 @@ func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, prompt string) (stri
 		workDir = "."
 	}
 
-	sessionInfo := a.sessionID
+	sessionInfo := sessionID
 	if sessionInfo == "" {
 		sessionInfo = "(new)"
 	}
-	a.logger.Printf("[claude-agent] Executing CLI (session: %s, folder: %s)", sessionInfo, workDir)
+	a.logger.Printf("[claude-agent] Executing CLI for chat %s (session: %s, folder: %s)", chatJID, sessionInfo, workDir)
 
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
@@ -173,12 +219,12 @@ func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, prompt string) (stri
 	}
 
 	// Parse stream-json output to get response and session ID
-	response, sessionID := parseStreamJSONOutput(stdout.String())
+	response, newSessionID := parseStreamJSONOutput(stdout.String())
 
-	// Save session ID for future calls
-	if sessionID != "" && a.sessionID != sessionID {
-		a.logger.Printf("[claude-agent] Captured session ID: %s", sessionID)
-		a.sessionID = sessionID
+	// Save session ID for future calls from this chat
+	if newSessionID != "" && newSessionID != sessionID {
+		a.logger.Printf("[claude-agent] Captured session ID for chat %s: %s", chatJID, newSessionID)
+		a.setSessionID(chatJID, newSessionID)
 	}
 
 	return response, nil

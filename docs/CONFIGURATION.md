@@ -250,10 +250,15 @@ claude mcp add --transport stdio officeclaw -- C:\path\to\officeclaw.exe mcp ser
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read files from allowed directories (respects `tools.file_access.allowed_paths`) |
-| `execute_task` | Execute predefined tasks from config |
+| `execute_task` | Execute predefined tasks (supports async execution for long-running tasks) |
+| `view_task_log` | View task execution logs (list running tasks, find recent logs, read log contents) |
 | `vpn_control` | Connect/disconnect VPN, check status |
 
 **Note**: The `send_message` tool requires an active WhatsApp connection and is only available when running the full OfficeClaw application, not in standalone MCP mode.
+
+### Automatic MCP in OCC: Mode
+
+When using OCC: mode, OfficeClaw automatically configures itself as an MCP server for the spawned Claude CLI session. This means Claude CLI has access to all OfficeClaw tools without any manual MCP configuration. The MCP server is spawned as a child process and communicates via stdio.
 
 ### Verifying MCP Server
 
