@@ -6,6 +6,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/officeclaw/src/llm"
+	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/tasks"
 	"github.com/officeclaw/src/telemetry"
 	"github.com/officeclaw/src/tools"
@@ -42,11 +45,14 @@ When you receive a message, analyze the request, use appropriate tools, and send
 
 // Config holds agent dependencies.
 type Config struct {
-	LLMClient    *llm.Client
-	ToolRegistry *tools.Registry
-	TaskExecutor *tasks.Executor
-	Logger       *log.Logger
-	DefaultTask  string
+	LLMClient        *llm.Client
+	ToolRegistry     *tools.Registry
+	TaskExecutor     *tasks.Executor
+	MemoryClient     *memory.Client // Optional: nil if memory service not available
+	Logger           *log.Logger
+	DefaultTask      string
+	MaxContextTokens int     // For flush detection (default: 100000)
+	FlushThreshold   float64 // Context percentage to trigger flush (default: 0.8)
 }
 
 // IncomingMessage represents a trigger message from email or Teams.
@@ -63,11 +69,16 @@ type IncomingMessage struct {
 
 // Agent is the core AI agent that processes incoming messages.
 type Agent struct {
-	llmClient    *llm.Client
-	toolRegistry *tools.Registry
-	taskExecutor *tasks.Executor
-	logger       *log.Logger
-	defaultTask  string
+	llmClient        *llm.Client
+	toolRegistry     *tools.Registry
+	taskExecutor     *tasks.Executor
+	memoryClient     *memory.Client
+	logger           *log.Logger
+	defaultTask      string
+	sessionID        string  // Current session ID for memory logging
+	maxContextTokens int     // For flush detection
+	flushThreshold   float64 // Context percentage to trigger flush
+	messages         []llm.Message // Conversation history for flush detection
 }
 
 // New creates a new Agent.
@@ -83,13 +94,96 @@ func New(cfg Config) *Agent {
 	systemPrompt := SystemPromptBase + toolDescriptions.String()
 	cfg.LLMClient.SetSystemPrompt(systemPrompt)
 
-	return &Agent{
-		llmClient:    cfg.LLMClient,
-		toolRegistry: cfg.ToolRegistry,
-		taskExecutor: cfg.TaskExecutor,
-		logger:       cfg.Logger,
-		defaultTask:  cfg.DefaultTask,
+	// Apply defaults for memory settings
+	maxContextTokens := cfg.MaxContextTokens
+	if maxContextTokens <= 0 {
+		maxContextTokens = 100000
 	}
+	flushThreshold := cfg.FlushThreshold
+	if flushThreshold <= 0 {
+		flushThreshold = 0.8
+	}
+
+	return &Agent{
+		llmClient:        cfg.LLMClient,
+		toolRegistry:     cfg.ToolRegistry,
+		taskExecutor:     cfg.TaskExecutor,
+		memoryClient:     cfg.MemoryClient,
+		logger:           cfg.Logger,
+		defaultTask:      cfg.DefaultTask,
+		sessionID:        generateSessionID(),
+		maxContextTokens: maxContextTokens,
+		flushThreshold:   flushThreshold,
+		messages:         make([]llm.Message, 0),
+	}
+}
+
+// generateSessionID creates a new session ID for memory logging.
+// Format: oc-{timestamp}-{random6chars}
+func generateSessionID() string {
+	randomBytes := make([]byte, 3)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("oc-%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(randomBytes))
+}
+
+// ClearSession resets conversation history and starts a new session.
+// Called when user sends /clear command.
+func (a *Agent) ClearSession() {
+	a.messages = make([]llm.Message, 0)
+	a.sessionID = generateSessionID()
+	a.logger.Printf("[agent] Session cleared, new session ID: %s", a.sessionID)
+}
+
+// SessionID returns the current session ID.
+func (a *Agent) SessionID() string {
+	return a.sessionID
+}
+
+// ForceSummary triggers manual distillation to extract summary and facts.
+// Called when user sends /summary command.
+func (a *Agent) ForceSummary(ctx context.Context) (string, error) {
+	if a.memoryClient == nil {
+		return "Memory service not connected", nil
+	}
+	if len(a.messages) == 0 {
+		return "No conversation to summarize", nil
+	}
+
+	// Inject distillation prompt
+	distillPrompt := memory.GetDistillationPrompt(0.0) // 0.0 = manual trigger
+	messagesWithDistill := append(a.messages, llm.Message{Role: "user", Content: distillPrompt})
+
+	// Get tool definitions for the LLM call
+	toolDefs := a.toolRegistry.Definitions()
+
+	// Call LLM
+	resp, err := a.llmClient.Complete(ctx, messagesWithDistill, toolDefs)
+	if err != nil {
+		return "", fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	// Parse and save distillation results
+	summary, facts := memory.ParseDistillationResponse(resp.Content)
+	if summary != "" {
+		if err := a.memoryClient.WriteDaily(ctx, "system", "Session Summary: "+summary, a.sessionID); err != nil {
+			a.logger.Printf("[agent] Failed to write summary to memory: %v", err)
+		}
+	}
+	if facts != "" {
+		if err := a.memoryClient.WriteMemory(ctx, facts, ""); err != nil {
+			a.logger.Printf("[agent] Failed to write facts to memory: %v", err)
+		}
+	}
+
+	// Strip markers and return clean response
+	cleanResponse := memory.StripDistillationMarkers(resp.Content)
+	if cleanResponse == "" {
+		if summary != "" {
+			return "Summary saved: " + summary, nil
+		}
+		return "Session summarized (no additional response)", nil
+	}
+	return cleanResponse, nil
 }
 
 // HandleMessage processes an incoming trigger message through the LLM.
@@ -106,15 +200,39 @@ func (a *Agent) HandleMessage(ctx context.Context, msg IncomingMessage) {
 	// Build user prompt from the incoming message
 	userPrompt := a.buildPrompt(msg)
 
+	// Log user message to memory service (async)
+	if a.memoryClient != nil {
+		go func() {
+			if err := a.memoryClient.WriteDaily(ctx, "user", userPrompt, a.sessionID); err != nil {
+				a.logger.Printf("[agent] Failed to log user message to memory: %v", err)
+			}
+		}()
+	}
+
+	// Add user message to conversation history
+	userMsg := llm.Message{Role: "user", Content: userPrompt}
+	a.messages = append(a.messages, userMsg)
+
 	// Build conversation with the user message
-	messages := []llm.Message{
-		{Role: "user", Content: userPrompt},
+	messages := []llm.Message{userMsg}
+
+	// Check for 80% context flush
+	flushTriggered := false
+	var flushUsage float64
+	if a.memoryClient != nil {
+		flushTriggered, flushUsage = memory.CheckFlushNeeded(a.messages, a.maxContextTokens, a.flushThreshold)
+		if flushTriggered {
+			a.logger.Printf("[agent] Context flush triggered at %.0f%% usage", flushUsage*100)
+			distillPrompt := memory.GetDistillationPrompt(flushUsage)
+			messages = append(messages, llm.Message{Role: "user", Content: distillPrompt})
+		}
 	}
 
 	// Get tool definitions
 	toolDefs := a.toolRegistry.Definitions()
 
 	// Agent loop: send to LLM, execute tool calls, repeat
+	var finalResponse string
 	for round := 0; round < MaxToolCallRounds; round++ {
 		a.logger.Printf("[agent] Round %d: sending to LLM (%d messages, %d tools)",
 			round+1, len(messages), len(toolDefs))
@@ -133,6 +251,40 @@ func (a *Agent) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			a.logger.Printf("[agent] Final response received (round %d, %d tokens)",
 				round+1, resp.Usage.TotalTokens)
 
+			finalResponse = resp.Content
+
+			// Handle distillation if flush was triggered
+			if flushTriggered && a.memoryClient != nil {
+				summary, facts := memory.ParseDistillationResponse(finalResponse)
+				if summary != "" {
+					go func() {
+						if err := a.memoryClient.WriteDaily(ctx, "system", "Session Summary: "+summary, a.sessionID); err != nil {
+							a.logger.Printf("[agent] Failed to write summary to memory: %v", err)
+						}
+					}()
+				}
+				if facts != "" {
+					go func() {
+						if err := a.memoryClient.WriteMemory(ctx, facts, ""); err != nil {
+							a.logger.Printf("[agent] Failed to write facts to memory: %v", err)
+						}
+					}()
+				}
+				finalResponse = memory.StripDistillationMarkers(finalResponse)
+			}
+
+			// Log assistant response to memory service (async)
+			if a.memoryClient != nil && finalResponse != "" {
+				go func() {
+					if err := a.memoryClient.WriteDaily(ctx, "assistant", finalResponse, a.sessionID); err != nil {
+						a.logger.Printf("[agent] Failed to log assistant message to memory: %v", err)
+					}
+				}()
+			}
+
+			// Store assistant response in conversation history
+			a.messages = append(a.messages, llm.Message{Role: "assistant", Content: finalResponse})
+
 			if telemetry.GlobalMetrics != nil {
 				telemetry.GlobalMetrics.MessagesProcessed.Add(ctx, 1)
 			}
@@ -140,7 +292,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg IncomingMessage) {
 			// Log the response
 			duration := time.Since(startTime).Seconds()
 			a.logger.Printf("[agent] Message processed in %.1fs: %s",
-				duration, truncate(resp.Content, 200))
+				duration, truncate(finalResponse, 200))
 			return
 		}
 

@@ -83,6 +83,18 @@ type ToolsConfig struct {
 	Messaging     MessagingConfig     `yaml:"messaging"`
 	TaskExecution TaskExecutionConfig `yaml:"task_execution"`
 	VPN           VPNConfig           `yaml:"vpn"`
+	Memory        MemoryConfig        `yaml:"memory"`
+}
+
+// MemoryConfig configures integration with the memory service.
+type MemoryConfig struct {
+	// ServiceURL is the memory service URL (e.g., "http://localhost:8007")
+	// If empty or unreachable, memory features are disabled.
+	ServiceURL string `yaml:"service_url"`
+	// FlushThreshold is the context percentage to trigger distillation (default: 0.8)
+	FlushThreshold float64 `yaml:"flush_threshold"`
+	// MaxContextTokens is the max tokens for flush detection (default: 100000)
+	MaxContextTokens int `yaml:"max_context_tokens"`
 }
 
 // FileAccessConfig configures the local file read tool.
@@ -268,6 +280,13 @@ func applyDefaults(cfg *Config) {
 		cfg.Tools.VPN.VPNNames = []string{"MSFT-AzVPN-Manual", "MSFTVPN-Manual"}
 	}
 
+	// Memory defaults
+	if cfg.Tools.Memory.FlushThreshold <= 0 {
+		cfg.Tools.Memory.FlushThreshold = 0.8
+	}
+	if cfg.Tools.Memory.MaxContextTokens <= 0 {
+		cfg.Tools.Memory.MaxContextTokens = 100000
+	}
 }
 
 // Validate checks that required fields are present.

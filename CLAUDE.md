@@ -31,6 +31,12 @@ make fmt                    # Format code with gofmt
 
 # Dependency management
 make deps                   # Download and tidy dependencies
+
+# Memory service utilities (requires memory service running)
+make memory-health          # Check memory service status
+make memory-reindex         # Rebuild vector index
+make memory-context         # Get memory context
+make memory-search          # Interactive semantic search
 ```
 
 ## Architecture Overview
@@ -74,6 +80,10 @@ See `agent/claude_agent.go` for implementation.
   - `taskexec.go`: Predefined task execution with async support (only tasks in config are allowed)
   - `tasklog.go`: View task execution logs (running tasks, recent logs, read log contents)
   - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
+  - `memory.go`: Memory tools (memory_search, memory_write) - requires memory service
+- **memory/**: HTTP client for LLMCrawl's memory service
+  - `client.go`: HTTP client for memory service REST API
+  - `flush.go`: 80% context flush detection and distillation parsing
 - **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
   - `server.go`: JSON-RPC stdio server implementation
   - `protocol.go`: MCP and JSON-RPC type definitions
@@ -152,6 +162,7 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `llm.provider`: "anthropic", "azure", or "openai"
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
 - `tools.vpn.vpn_names`: Windows VPN connection names (first is default)
+- `tools.memory.service_url`: Memory service URL (empty = disabled, see Memory Service section)
 - `tasks.<name>.command`: Predefined command for task execution (only listed tasks are allowed)
 
 ### WhatsApp Setup
@@ -221,3 +232,75 @@ When enabled, Prometheus metrics exposed at `http://localhost:9090/metrics`:
 - `officeclaw.tasks.executed`: Task executions (labeled by task, status)
 
 OpenTelemetry tracing is also available when `telemetry.otel.enabled` is true.
+
+## Memory Service Integration
+
+OfficeClaw integrates with LLMCrawl's standalone memory service for long-term memory across sessions. This is an optional feature that provides:
+
+- **Conversation logging**: All messages are logged to daily markdown files
+- **Semantic search**: Search past conversations using vector similarity
+- **Durable facts**: Save important information to MEMORY.md for future sessions
+- **Automatic distillation**: When context reaches 80%, extract summary and facts
+
+### Setup
+
+Deploy the memory service from the LLMCrawl repository:
+
+```powershell
+# From LLMCrawl repo
+cd C:\src\github\LLMCrawl\memory-service
+
+# REQUIRED: Set the path where conversation logs and MEMORY.md will be stored
+$env:MEMORY_DATA_PATH = "C:\Users\you\OfficeClaw\memory"
+
+# Optional: Change port (default 8007) or log level
+$env:PORT = "8007"
+$env:LOG_LEVEL = "INFO"
+
+# Start memory service + Milvus
+docker compose up -d
+
+# Verify health
+curl http://localhost:8007/health
+```
+
+**Environment variables:**
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MEMORY_DATA_PATH` | **Yes** | - | Host path for logs/MEMORY.md |
+| `PORT` | No | 8007 | Service port |
+| `LOG_LEVEL` | No | INFO | Logging level |
+
+For full API documentation, see `C:\src\github\LLMCrawl\docs\MEMORY.md`.
+
+Configure OfficeClaw to use the memory service:
+
+```yaml
+tools:
+  memory:
+    service_url: "http://localhost:8007"
+    flush_threshold: 0.8           # Trigger distillation at 80% context
+    max_context_tokens: 100000     # Max tokens for flush detection
+```
+
+### Session Management
+
+**OC: mode**: Session ID generated on process start (`oc-{timestamp}-{random}`). Use `/clear` command to start a new session.
+
+**OCC: mode**: Uses Claude CLI's conversation_id as session ID. Use the reset keyword (default: "reset") to clear the session.
+
+### Memory Tools
+
+When memory service is available, two tools are registered for LLM use:
+
+- `memory_search`: Search past conversations and facts semantically
+- `memory_write`: Save durable facts to long-term memory
+
+### Commands
+
+- `/clear`: Clear conversation context and start a new session (OC: mode)
+- `/summary`: Force distillation to extract and save summary/facts (OC: mode)
+
+### Graceful Degradation
+
+If `service_url` is empty or the memory service is unreachable on startup, memory features are disabled. OfficeClaw continues to function normally without memory capabilities.

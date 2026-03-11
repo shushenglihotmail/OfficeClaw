@@ -1,4 +1,4 @@
-.PHONY: build run test clean lint fmt tidy
+.PHONY: build run test clean lint fmt tidy memory-health memory-reindex memory-context memory-search
 
 BINARY_NAME=officeclaw.exe
 BUILD_DIR=build
@@ -34,3 +34,20 @@ clean:
 deps:
 	go mod download
 	go mod tidy
+
+# Memory service utilities (service deployed separately via LLMCrawl)
+# Deploy: docker compose -f docker-compose.memory.yml up -d (from LLMCrawl repo)
+memory-health:
+	curl -s http://localhost:8007/health | jq .
+
+memory-reindex:
+	curl -s -X POST http://localhost:8007/reindex | jq .
+
+memory-context:
+	curl -s "http://localhost:8007/context?max_tokens=2000" | jq .
+
+memory-search:
+	@echo "Enter search query:" && read q && \
+	curl -s -X POST http://localhost:8007/search \
+		-H "Content-Type: application/json" \
+		-d "{\"query\": \"$$q\", \"limit\": 5}" | jq .

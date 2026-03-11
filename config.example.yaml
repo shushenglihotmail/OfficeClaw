@@ -87,6 +87,25 @@ tools:
     # Optional: UNC path to verify internal network access after connecting
     # verify_path: "\\\\internal-share\\folder"
 
+  # Memory service integration
+  # Provides long-term memory via LLMCrawl's memory service (deployed separately)
+  # If service_url is empty or service is unreachable, memory features are disabled.
+  #
+  # Deployment (requires Docker):
+  #   cd C:\src\github\LLMCrawl\memory-service
+  #   $env:MEMORY_DATA_PATH = "C:\Users\you\OfficeClaw\memory"  # REQUIRED
+  #   docker compose up -d
+  #
+  # See LLMCrawl\docs\MEMORY.md for full API documentation
+  memory:
+    # Memory service URL (leave empty to disable memory features)
+    service_url: "http://localhost:8007"
+    # Context percentage to trigger automatic distillation (0.0-1.0)
+    # When context reaches this threshold, summary and facts are extracted
+    flush_threshold: 0.8
+    # Maximum context tokens for flush detection
+    max_context_tokens: 100000
+
 # Task definitions
 # Only predefined tasks listed here can be executed by the agent.
 # The agent will refuse to run any task not in this list.

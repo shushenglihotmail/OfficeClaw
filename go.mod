@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/getlantern/systray v1.2.2
+	github.com/google/uuid v1.6.0
+	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/prometheus/client_golang v1.19.0
 	go.mau.fi/whatsmeow v0.0.0-20260227112304-c9652e4448a2
 	go.opentelemetry.io/otel v1.24.0
@@ -34,10 +36,8 @@ require (
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mdp/qrterminal/v3 v3.2.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect

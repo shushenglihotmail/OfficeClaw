@@ -14,6 +14,7 @@ import (
 	"github.com/officeclaw/src/config"
 	"github.com/officeclaw/src/llm"
 	"github.com/officeclaw/src/mcp"
+	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/tasks"
 	"github.com/officeclaw/src/telemetry"
 	"github.com/officeclaw/src/tools"
@@ -111,15 +112,36 @@ func main() {
 		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
 	}
 
+	// Initialize memory client (optional - graceful degradation if service not available)
+	var memoryClient *memory.Client
+	if cfg.Tools.Memory.ServiceURL != "" {
+		memoryClient = memory.NewClient(cfg.Tools.Memory.ServiceURL)
+		if err := memoryClient.HealthCheck(ctx); err != nil {
+			logger.Printf("Memory service not reachable at %s: %v", cfg.Tools.Memory.ServiceURL, err)
+			logger.Printf("Memory features disabled")
+			memoryClient = nil
+		} else {
+			logger.Printf("Memory service connected at %s", cfg.Tools.Memory.ServiceURL)
+			// Register memory tools
+			toolRegistry.Register(tools.NewMemorySearchTool(memoryClient))
+			toolRegistry.Register(tools.NewMemoryWriteTool(memoryClient))
+		}
+	} else {
+		logger.Printf("Memory service not configured (service_url empty)")
+	}
+
 	logger.Printf("Tool registry initialized (%d tools registered)", toolRegistry.Count())
 
 	// Create the core agent
 	agentInstance := agent.New(agent.Config{
-		LLMClient:    llmClient,
-		ToolRegistry: toolRegistry,
-		TaskExecutor: taskExecutor,
-		Logger:       logger,
-		DefaultTask:  cfg.WhatsApp.DefaultTask,
+		LLMClient:        llmClient,
+		ToolRegistry:     toolRegistry,
+		TaskExecutor:     taskExecutor,
+		MemoryClient:     memoryClient,
+		Logger:           logger,
+		DefaultTask:      cfg.WhatsApp.DefaultTask,
+		MaxContextTokens: cfg.Tools.Memory.MaxContextTokens,
+		FlushThreshold:   cfg.Tools.Memory.FlushThreshold,
 	})
 
 	// Setup context with cancellation for graceful shutdown
@@ -151,6 +173,7 @@ func main() {
 		CLIPath:       cfg.LLM.Anthropic.CLIPath,
 		WorkingFolder: cfg.WhatsApp.ClaudeWorkingFolder,
 		WAClient:      waClient,
+		MemoryClient:  memoryClient,
 		Logger:        logger,
 		ResetKeyword:  cfg.WhatsApp.ClaudeSessionResetKeyword,
 	})
@@ -250,6 +273,19 @@ func runMCPServer() {
 	// Task log viewing tool (always enabled if task execution is enabled)
 	if cfg.Tools.TaskExecution.Enabled {
 		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
+	}
+
+	// Initialize memory client for MCP server
+	if cfg.Tools.Memory.ServiceURL != "" {
+		memoryClient := memory.NewClient(cfg.Tools.Memory.ServiceURL)
+		ctx := context.Background()
+		if err := memoryClient.HealthCheck(ctx); err != nil {
+			logger.Printf("Memory service not reachable at %s: %v", cfg.Tools.Memory.ServiceURL, err)
+		} else {
+			logger.Printf("Memory service connected at %s", cfg.Tools.Memory.ServiceURL)
+			toolRegistry.Register(tools.NewMemorySearchTool(memoryClient))
+			toolRegistry.Register(tools.NewMemoryWriteTool(memoryClient))
+		}
 	}
 
 	// Note: send_message tool requires WhatsApp client which isn't available in standalone mode

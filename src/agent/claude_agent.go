@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/whatsapp"
 )
 
@@ -27,6 +28,7 @@ type ClaudeAgent struct {
 	workingFolder   string
 	officeClawPath  string // Path to OfficeClaw executable for MCP server
 	waClient        *whatsapp.Client
+	memoryClient    *memory.Client // Optional: nil if memory service not available
 	logger          *log.Logger
 	timeout         time.Duration
 	resetKeyword    string // Keyword to reset session (e.g., "reset")
@@ -41,6 +43,7 @@ type ClaudeAgentConfig struct {
 	CLIPath       string           // Path to Claude CLI (auto-detected if empty)
 	WorkingFolder string           // Working directory for Claude CLI
 	WAClient      *whatsapp.Client // WhatsApp client for sending replies
+	MemoryClient  *memory.Client   // Optional: memory service client for logging
 	Logger        *log.Logger
 	Timeout       time.Duration // Timeout for CLI execution
 	ResetKeyword  string        // Keyword to reset session (default: "reset")
@@ -91,6 +94,7 @@ func NewClaudeAgent(cfg ClaudeAgentConfig) (*ClaudeAgent, error) {
 		workingFolder:  workingFolder,
 		officeClawPath: officeClawPath,
 		waClient:       cfg.WAClient,
+		memoryClient:   cfg.MemoryClient,
 		logger:         cfg.Logger,
 		timeout:        timeout,
 		resetKeyword:   resetKeyword,
@@ -145,11 +149,40 @@ Message: %s
 Respond directly to the user's message.`,
 		msg.SenderJID, msg.Body)
 
+	// Log user message to memory service (async)
+	// Use existing session ID if available, otherwise use chat JID as prefix
+	sessionID := a.getSessionID(msg.ChatJID)
+	memorySessionID := sessionID
+	if memorySessionID == "" {
+		memorySessionID = "occ-" + msg.ChatJID // Temporary until we get Claude's session ID
+	}
+	if a.memoryClient != nil {
+		go func() {
+			if err := a.memoryClient.WriteDaily(ctx, "user", msg.Body, memorySessionID); err != nil {
+				a.logger.Printf("[claude-agent] Failed to log user message to memory: %v", err)
+			}
+		}()
+	}
+
 	// Execute Claude CLI with --resume to maintain per-chat session context
 	response, err := a.executeClaudeCLI(ctx, msg.ChatJID, prompt)
 	if err != nil {
 		a.logger.Printf("[claude-agent] CLI error: %v", err)
 		response = fmt.Sprintf("Sorry, I encountered an error: %v", err)
+	}
+
+	// Log assistant response to memory service (async)
+	// Use updated session ID (may have been captured from CLI output)
+	if a.memoryClient != nil && response != "" {
+		finalSessionID := a.getSessionID(msg.ChatJID)
+		if finalSessionID == "" {
+			finalSessionID = memorySessionID
+		}
+		go func() {
+			if err := a.memoryClient.WriteDaily(ctx, "assistant", response, finalSessionID); err != nil {
+				a.logger.Printf("[claude-agent] Failed to log assistant message to memory: %v", err)
+			}
+		}()
 	}
 
 	a.sendReply(ctx, msg.ChatJID, response)
