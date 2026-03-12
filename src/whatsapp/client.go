@@ -36,6 +36,7 @@ type Client struct {
 	logger             *log.Logger
 	triggerPrefix      string       // e.g., "OfficeClaw:"
 	claudeTrigger      string       // e.g., "OfficeClaw-Claude:"
+	machineName        string       // e.g., "office1" (for targeted messaging)
 	handler            MessageHandler
 	claudeHandler      MessageHandler
 	mu                 sync.RWMutex
@@ -65,6 +66,8 @@ type Config struct {
 	ClaudeTrigger string
 	// Default task when none specified
 	DefaultTask string
+	// Unique name for this machine (used for targeted messaging)
+	MachineName string
 	// Logger
 	Logger *log.Logger
 }
@@ -109,6 +112,7 @@ func New(cfg Config) (*Client, error) {
 		logger:        cfg.Logger,
 		triggerPrefix: cfg.TriggerPrefix,
 		claudeTrigger: cfg.ClaudeTrigger,
+		machineName:   cfg.MachineName,
 	}, nil
 }
 
@@ -226,6 +230,31 @@ func (c *Client) handleMessage(msg *events.Message) {
 	// Extract content after prefix (case-insensitive removal)
 	content := text[len(prefix):]
 	content = strings.TrimSpace(content)
+
+	// Machine-targeted routing: check for <machine1,machine2>: prefix
+	if c.machineName != "" && strings.HasPrefix(content, "<") {
+		if closeIdx := strings.Index(content, ">"); closeIdx != -1 {
+			targetStr := content[1:closeIdx]
+			targets := strings.Split(targetStr, ",")
+			matched := false
+			for _, t := range targets {
+				if strings.EqualFold(strings.TrimSpace(t), c.machineName) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				c.logger.Printf("Machine routing: message targets %q, this machine is %q — skipping", targetStr, c.machineName)
+				return
+			}
+			// Strip the <...>: prefix from content
+			rest := content[closeIdx+1:]
+			if strings.HasPrefix(rest, ":") {
+				rest = rest[1:]
+			}
+			content = strings.TrimSpace(rest)
+		}
+	}
 
 	// Parse task name (first word) or use default - only for OfficeClaw mode
 	taskName := "assist"

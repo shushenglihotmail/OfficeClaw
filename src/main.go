@@ -57,6 +57,7 @@ func main() {
 		TriggerPrefix: cfg.WhatsApp.TriggerPrefix,
 		ClaudeTrigger: cfg.WhatsApp.ClaudeTrigger,
 		DefaultTask:   cfg.WhatsApp.DefaultTask,
+		MachineName:   cfg.WhatsApp.MachineName,
 		Logger:        logger,
 	})
 	if err != nil {
@@ -111,6 +112,9 @@ func main() {
 	if cfg.Tools.TaskExecution.Enabled {
 		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
 	}
+
+	// Identity tool (always registered — lightweight read-only tool)
+	toolRegistry.Register(tools.NewIdentityTool(cfg.WhatsApp.MachineName))
 
 	// Initialize memory client (optional - graceful degradation if service not available)
 	var memoryClient *memory.Client
@@ -274,6 +278,9 @@ func runMCPServer() {
 	if cfg.Tools.TaskExecution.Enabled {
 		toolRegistry.Register(tools.NewTaskLogTool(taskExecutor))
 	}
+
+	// Identity tool (always registered — lightweight read-only tool)
+	toolRegistry.Register(tools.NewIdentityTool(cfg.WhatsApp.MachineName))
 
 	// Initialize memory client for MCP server
 	if cfg.Tools.Memory.ServiceURL != "" {

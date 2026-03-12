@@ -33,6 +33,8 @@ type WhatsAppConfig struct {
 	ClaudeSessionResetKeyword string `yaml:"claude_session_reset_keyword"`
 	// Default task when none specified in message
 	DefaultTask string `yaml:"default_task"`
+	// Unique name for this machine (used for targeted messaging)
+	MachineName string `yaml:"machine_name"`
 }
 
 // LLMConfig holds multi-provider LLM settings.

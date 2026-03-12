@@ -68,6 +68,17 @@ OfficeClaw supports two operating modes triggered by different prefixes (both ca
 This mode gives Claude CLI full autonomy while still providing access to OfficeClaw tools (task execution, file access, task logs, VPN control) via MCP.
 See `agent/claude_agent.go` for implementation.
 
+### Machine-Targeted Messaging
+
+When multiple OfficeClaw instances share the same WhatsApp account, messages can be targeted to specific machines using angle-bracket syntax after the trigger prefix:
+
+- `OC:<home>: hello` — only the machine named "home" responds
+- `OC:<home, office>: hello` — both "home" and "office" respond
+- `OC: hello` — all machines respond (no filter, backward compatible)
+- `OC: who are you` — each machine uses the `get_identity` tool to report its name
+
+Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:).
+
 ### Package Responsibilities
 
 - **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand
@@ -81,6 +92,7 @@ See `agent/claude_agent.go` for implementation.
   - `tasklog.go`: View task execution logs (running tasks, recent logs, read log contents)
   - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
   - `memory.go`: Memory tools (memory_search, memory_write) - requires memory service
+  - `identity.go`: Machine identity tool (always registered, returns configured machine name)
 - **memory/**: HTTP client for LLMCrawl's memory service
   - `client.go`: HTTP client for memory service REST API
   - `flush.go`: 80% context flush detection and distillation parsing
@@ -159,6 +171,7 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `whatsapp.claude_trigger`: Message prefix for Claude CLI agent mode (default: "OCC:")
 - `whatsapp.claude_working_folder`: Working directory for Claude CLI agent
 - `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
+- `whatsapp.machine_name`: Unique name for this machine (used for targeted messaging)
 - `llm.provider`: "anthropic", "azure", or "openai"
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
 - `tools.vpn.vpn_names`: Windows VPN connection names (first is default)
