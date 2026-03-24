@@ -104,6 +104,8 @@ func NewClient(cfg config.LLMConfig) (*Client, error) {
 		provider, err = NewAzureProvider(cfg.Azure, cfg.Temperature, cfg.RequestTimeoutSeconds)
 	case "openai":
 		provider, err = NewOpenAIProvider(cfg.OpenAI, cfg.Temperature, cfg.RequestTimeoutSeconds)
+	case "copilot":
+		provider, err = NewCopilotCLIProvider(cfg.Copilot, cfg.Temperature, cfg.RequestTimeoutSeconds)
 	default:
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.Provider)
 	}

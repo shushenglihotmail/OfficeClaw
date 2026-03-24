@@ -1,4 +1,4 @@
-.PHONY: build run test clean lint fmt tidy memory-health memory-reindex memory-context memory-search
+.PHONY: build run test clean lint fmt tidy memory-health memory-reindex memory-context memory-search service-install service-uninstall
 
 BINARY_NAME=officeclaw.exe
 BUILD_DIR=build
@@ -34,6 +34,13 @@ clean:
 deps:
 	go mod download
 	go mod tidy
+
+# Windows service management (run as admin)
+service-install:
+	$(BUILD_DIR)/$(BINARY_NAME) service install
+
+service-uninstall:
+	$(BUILD_DIR)/$(BINARY_NAME) service uninstall
 
 # Memory service utilities (service deployed separately via LLMCrawl)
 # Deploy: docker compose -f docker-compose.memory.yml up -d (from LLMCrawl repo)

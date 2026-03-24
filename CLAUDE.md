@@ -21,6 +21,12 @@ make run                    # Equivalent to: go run ./src
 # Run MCP server (for Claude CLI integration)
 ./build/officeclaw.exe mcp serve
 
+# Windows service management (run as admin)
+./build/officeclaw.exe service install    # Register as Windows service with auto-recovery
+./build/officeclaw.exe service uninstall  # Remove Windows service
+make service-install                       # Same via Makefile
+make service-uninstall
+
 # Run tests
 make test                   # Run all tests in test/
 make test-coverage          # Generate coverage.html
@@ -41,7 +47,7 @@ make memory-search          # Interactive semantic search
 
 ## Architecture Overview
 
-OfficeClaw supports two operating modes triggered by different prefixes (both case-insensitive):
+OfficeClaw supports three operating modes triggered by different prefixes (all case-insensitive):
 
 ### OC: Mode (OfficeClaw Agent)
 **Core Loop**: WhatsApp Listener → OfficeClaw Agent → LLM ↔ Tools (repeat until final response)
@@ -68,6 +74,20 @@ OfficeClaw supports two operating modes triggered by different prefixes (both ca
 This mode gives Claude CLI full autonomy while still providing access to OfficeClaw tools (task execution, file access, task logs, VPN control) via MCP.
 See `agent/claude_agent.go` for implementation.
 
+### OCCO: Mode (Copilot CLI Agent)
+**Direct invocation**: WhatsApp Listener → Copilot CLI (with --allow-all + MCP tools)
+
+1. WhatsApp listener detects message starting with "OCCO:"
+2. Copilot CLI spawned with `--allow-all` (auto-approval for tools, paths, URLs)
+3. OfficeClaw configures itself as MCP server via `--additional-mcp-config`
+4. Copilot runs in `whatsapp.copilot_working_folder` with full tool access
+5. Uses `--output-format json` (JSONL) for structured response parsing
+6. Session persistence via `--resume=<sessionId>` (same pattern as Claude agent)
+7. Final response sent back via WhatsApp
+
+This mode mirrors the Claude CLI agent but uses GitHub Copilot's LLM models.
+See `agent/copilot_agent.go` for implementation.
+
 ### Machine-Targeted Messaging
 
 When multiple OfficeClaw instances share the same WhatsApp account, messages can be targeted to specific machines using angle-bracket syntax after the trigger prefix:
@@ -77,14 +97,16 @@ When multiple OfficeClaw instances share the same WhatsApp account, messages can
 - `OC: hello` — all machines respond (no filter, backward compatible)
 - `OC: who are you` — each machine uses the `get_identity` tool to report its name
 
-Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:).
+Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:, OCCO:).
 
 ### Package Responsibilities
 
-- **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand
+- **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand, service subcommand
 - **agent/**: Core orchestration loop, prompt building, conversation management
   - `claude_agent.go`: OCC: mode - Claude CLI integration with session persistence
-- **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI), unified message format
+  - `copilot_agent.go`: OCCO: mode - Copilot CLI integration with session persistence
+  - `commands.go`: Unified slash command system (parsing, model lists, help text)
+- **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI/Copilot), unified message format
 - **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
   - `messaging.go`: WhatsApp reply tool
   - `fileaccess.go`: Local file read tool (path-whitelisted)
@@ -96,6 +118,8 @@ Machine names are configured via `whatsapp.machine_name` in config.yaml. Matchin
 - **memory/**: HTTP client for LLMCrawl's memory service
   - `client.go`: HTTP client for memory service REST API
   - `flush.go`: 80% context flush detection and distillation parsing
+- **service/**: Windows Service integration (install/uninstall, SCM handler, auto-recovery)
+- **pending/**: Persistent message queue for unsent replies (JSON file-backed, retry on startup)
 - **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
   - `server.go`: JSON-RPC stdio server implementation
   - `protocol.go`: MCP and JSON-RPC type definitions
@@ -169,7 +193,9 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 **Critical config paths**:
 - `whatsapp.trigger_prefix`: Message prefix for OfficeClaw agent mode (default: "OC:")
 - `whatsapp.claude_trigger`: Message prefix for Claude CLI agent mode (default: "OCC:")
+- Copilot CLI agent trigger is hardcoded as "OCCO:" (not configurable)
 - `whatsapp.claude_working_folder`: Working directory for Claude CLI agent
+- `whatsapp.copilot_working_folder`: Working directory for Copilot CLI agent
 - `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
 - `whatsapp.machine_name`: Unique name for this machine (used for targeted messaging)
 - `llm.provider`: "anthropic", "azure", or "openai"
@@ -212,6 +238,23 @@ llm:
 
 **OpenAI**: Requires `OPENAI_API_KEY` environment variable or `llm.openai.api_key` config.
 
+**GitHub Copilot**: Uses the Copilot CLI with GitHub OAuth authentication. No API key required.
+
+The Copilot CLI must be installed and pre-authenticated (run `copilot login`). Auto-discovers from:
+1. `COPILOT_CLI_PATH` environment variable
+2. WinGet links directory
+3. `~/.copilot/bin/copilot.exe`
+4. System PATH
+
+```yaml
+llm:
+  provider: "copilot"
+  copilot:
+    model: ""         # Empty = Copilot default
+    max_tokens: 8192
+    cli_path: ""      # Auto-detected if empty
+```
+
 ## Testing
 
 - Tests live in `test/` directory
@@ -232,6 +275,47 @@ llm:
 - Build with `-ldflags="-H windowsgui"` to hide console window
 - Signal handling uses `syscall.SIGINT` and `syscall.SIGTERM`
 - Paths in config use Windows backslashes: `C:\\Users\\...`
+
+### Windows Service Mode
+
+OfficeClaw can run as a Windows service for 24/7 operation with automatic recovery:
+
+```powershell
+# Install as service (run as admin)
+.\build\officeclaw.exe service install
+
+# Start/stop via standard Windows tools
+sc start OfficeClaw
+sc stop OfficeClaw
+
+# Or via Services MMC: services.msc → OfficeClaw AI Agent
+
+# Uninstall
+.\build\officeclaw.exe service uninstall
+```
+
+**Auto-recovery**: The service is configured with automatic restart on failure:
+- 1st failure: restart after 10 seconds
+- 2nd failure: restart after 30 seconds
+- 3rd failure: restart after 60 seconds
+- Reset period: 24 hours
+
+**Service vs Interactive mode**: OfficeClaw auto-detects its environment:
+- **Interactive**: Shows system tray, responds to Ctrl+C
+- **Service**: No tray, responds to Windows SCM stop/shutdown/pre-shutdown commands
+
+### Graceful Shutdown
+
+On shutdown (signal, service stop, or tray quit), OfficeClaw:
+
+1. Stops accepting new WhatsApp messages
+2. Cancels running Claude CLI sessions (30s timeout)
+3. Waits for in-flight message handlers to complete (30s timeout)
+4. Disconnects WhatsApp
+
+### Pending Message Queue
+
+If a reply cannot be sent (e.g., WhatsApp disconnected during shutdown), it is saved to `pending_messages.json`. On the next startup, pending messages are automatically retried after WhatsApp reconnects. Messages older than 24 hours are discarded.
 
 ## Telemetry
 
@@ -300,7 +384,9 @@ tools:
 
 **OC: mode**: Session ID generated on process start (`oc-{timestamp}-{random}`). Use `/clear` command to start a new session.
 
-**OCC: mode**: Uses Claude CLI's conversation_id as session ID. Use the reset keyword (default: "reset") to clear the session.
+**OCC: mode**: Uses Claude CLI's conversation_id as session ID. Use `/reset` to clear the session.
+
+**OCCO: mode**: Uses Copilot CLI's sessionId as session ID. Use `/reset` to clear the session.
 
 ### Memory Tools
 
@@ -311,8 +397,22 @@ When memory service is available, two tools are registered for LLM use:
 
 ### Commands
 
-- `/clear`: Clear conversation context and start a new session (OC: mode)
-- `/summary`: Force distillation to extract and save summary/facts (OC: mode)
+OfficeClaw has a unified slash command system that works across all agent modes. Commands are sent as the message body after the trigger prefix (e.g., `OCC: /models`).
+
+**All modes (OC:, OCC:, OCCO:)**:
+- `/reset` — Clear session and start fresh
+- `/model <name> [effort]` — Switch to a different model (effort levels for OCCO: only: low/medium/high/xhigh)
+- `/models` — List available models for the current agent, with current model marked
+- `/help` — Show available commands
+
+**OC: mode only**:
+- `/clear` — Clear conversation context and start a new session
+- `/summary` — Force distillation to extract and save summary/facts
+
+**OCCO: mode only**:
+- `/effort <level>` — Set reasoning effort level (low/medium/high/xhigh) without changing model
+
+**Per-chat model overrides**: Each chat can have its own model override via `/model`. The override persists until changed or the session is reset. The `/models` command shows the current model with a `*` marker.
 
 ### Graceful Degradation
 

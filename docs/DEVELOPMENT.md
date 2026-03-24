@@ -3,22 +3,33 @@
 ## Prerequisites
 
 - Go 1.22+
-- Windows (for system tray)
+- Windows (for system tray and service)
 - GCC compiler (for SQLite - required by go-sqlite3)
-- Claude Code CLI (for Claude provider, authenticated via SSO)
+- Claude Code CLI (for OCC: mode, authenticated via SSO)
+- GitHub Copilot CLI (for OCCO: mode, authenticated via `copilot login`)
 
 ## Build
 
 ```bash
-# Console mode (shows stdout)
+# Console mode (shows stdout, for development)
 make build-console
 
-# Windows GUI mode (hides console, runs in system tray)
+# Windows GUI mode (hides console, for production)
 make build
 
-# Run directly
+# Run directly in development
 make run
+
+# Install as Windows service (run as admin)
+./build/officeclaw.exe service install
+net start OfficeClaw
+
+# Uninstall service
+net stop OfficeClaw
+./build/officeclaw.exe service uninstall
 ```
+
+The same binary works for all modes (interactive, service). It auto-detects whether it's running as a Windows service.
 
 ## Test
 
@@ -30,27 +41,37 @@ make test
 
 ```
 src/
-├── main.go           # Entry point & dependency wiring
-├── agent/            # Core agent orchestration loop
-├── whatsapp/         # WhatsApp Web integration (whatsmeow)
-├── config/           # Configuration (YAML + env overrides)
-├── llm/              # Multi-provider LLM clients
-│   ├── client.go     # Unified client & Provider interface
-│   ├── claude_cli.go # Claude CLI provider (SSO auth)
-│   ├── azure.go      # Azure OpenAI provider
-│   └── openai.go     # OpenAI API provider
-├── tools/            # Extensible tool system
-│   ├── registry.go   # Tool interface & registry
-│   ├── messaging.go  # WhatsApp reply tool
-│   ├── fileaccess.go # Local file read tool
-│   ├── taskexec.go   # Task execution tool (predefined only)
-│   └── vpn.go        # VPN management tool (rasdial + Entra ID)
-├── tasks/            # Task management
-│   └── executor.go   # Registry, executor, scheduler
-├── tray/             # Windows system tray
-│   └── tray.go
-└── telemetry/        # OpenTelemetry + Prometheus
-    └── telemetry.go
+├── main.go              # Entry point, dependency wiring, service/MCP subcommands
+├── agent/               # Core agent orchestration
+│   ├── agent.go         # OC: mode agent (LLM ↔ tool loop)
+│   ├── claude_agent.go  # OCC: mode (Claude CLI agent)
+│   ├── copilot_agent.go # OCCO: mode (Copilot CLI agent)
+│   └── commands.go      # Unified slash command system
+├── whatsapp/            # WhatsApp Web integration (whatsmeow + reconnection)
+├── config/              # Configuration (YAML + env overrides)
+├── llm/                 # Multi-provider LLM clients
+│   ├── client.go        # Unified client & Provider interface
+│   ├── claude_cli.go    # Claude CLI provider (SSO auth)
+│   ├── copilot_cli.go   # Copilot CLI provider (GitHub OAuth)
+│   ├── azure.go         # Azure OpenAI provider
+│   └── openai.go        # OpenAI API provider
+├── tools/               # Extensible tool system
+│   ├── registry.go      # Tool interface & registry
+│   ├── messaging.go     # WhatsApp reply tool
+│   ├── fileaccess.go    # Local file read tool
+│   ├── taskexec.go      # Task execution tool (predefined only)
+│   ├── tasklog.go       # Task log viewer
+│   ├── vpn.go           # VPN management tool (rasdial + Entra ID)
+│   ├── memory.go        # Memory search/write tools
+│   └── identity.go      # Machine identity tool
+├── mcp/                 # MCP server for CLI integration
+├── memory/              # Memory service client
+├── service/             # Windows Service (install/uninstall, SCM handler)
+├── pending/             # Pending message queue (JSON file-backed)
+├── tasks/               # Task management
+│   └── executor.go      # Registry, executor, scheduler
+├── tray/                # Windows system tray (interactive mode)
+└── telemetry/           # OpenTelemetry + Prometheus
 ```
 
 ## Adding a New Tool
@@ -81,6 +102,7 @@ Copy `config.example.yaml` to `config.yaml`. Environment variables override conf
 | Env Var | Config Path |
 |---------|-------------|
 | `CLAUDE_CLI_PATH` | `llm.anthropic.cli_path` |
+| `COPILOT_CLI_PATH` | `llm.copilot.cli_path` |
 | `AZURE_OPENAI_ENDPOINT` | `llm.azure.endpoint` |
 | `AZURE_OPENAI_API_KEY` | `llm.azure.api_key` |
 | `OPENAI_API_KEY` | `llm.openai.api_key` |
@@ -115,6 +137,11 @@ When `telemetry.prometheus.enabled` is true, Prometheus metrics are exposed at `
 - Ensure Claude Code CLI is installed
 - Run `claude` manually to authenticate via SSO
 - Set `CLAUDE_CLI_PATH` environment variable if auto-detection fails
+
+### Copilot CLI not found
+- Ensure GitHub Copilot CLI is installed
+- Run `copilot login` to authenticate via GitHub OAuth
+- Set `COPILOT_CLI_PATH` environment variable if auto-detection fails
 
 ### Build fails with CGO errors
 - Install GCC (e.g., via MSYS2 or TDM-GCC on Windows)

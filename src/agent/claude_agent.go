@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/officeclaw/src/memory"
+	"github.com/officeclaw/src/pending"
 	"github.com/officeclaw/src/whatsapp"
 )
 
@@ -36,6 +37,17 @@ type ClaudeAgent struct {
 	// Per-chat session tracking (thread-safe)
 	sessions map[string]string // chatJID -> sessionID
 	mu       sync.RWMutex
+
+	// Model override per chat (thread-safe, uses mu)
+	chatModels map[string]string // chatJID -> model override
+
+	// Graceful shutdown: track running CLI processes
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+	ctx    context.Context
+
+	// Pending queue for unsent messages (optional)
+	pendingQueue *pending.Queue
 }
 
 // ClaudeAgentConfig holds configuration for the Claude CLI agent.
@@ -44,6 +56,7 @@ type ClaudeAgentConfig struct {
 	WorkingFolder string           // Working directory for Claude CLI
 	WAClient      *whatsapp.Client // WhatsApp client for sending replies
 	MemoryClient  *memory.Client   // Optional: memory service client for logging
+	PendingQueue  *pending.Queue   // Optional: queue for unsent messages
 	Logger        *log.Logger
 	Timeout       time.Duration // Timeout for CLI execution
 	ResetKeyword  string        // Keyword to reset session (default: "reset")
@@ -89,16 +102,22 @@ func NewClaudeAgent(cfg ClaudeAgentConfig) (*ClaudeAgent, error) {
 		cfg.Logger.Printf("[claude-agent] Warning: could not get OfficeClaw path for MCP: %v", err)
 	}
 
+	agentCtx, agentCancel := context.WithCancel(context.Background())
+
 	return &ClaudeAgent{
 		cliPath:        cliPath,
 		workingFolder:  workingFolder,
 		officeClawPath: officeClawPath,
 		waClient:       cfg.WAClient,
 		memoryClient:   cfg.MemoryClient,
+		pendingQueue:   cfg.PendingQueue,
 		logger:         cfg.Logger,
 		timeout:        timeout,
 		resetKeyword:   resetKeyword,
-		sessions:       make(map[string]string), // Per-chat session tracking
+		sessions:       make(map[string]string),
+		chatModels:     make(map[string]string),
+		cancel:         agentCancel,
+		ctx:            agentCtx,
 	}, nil
 }
 
@@ -131,12 +150,13 @@ func (a *ClaudeAgent) HandleMessage(ctx context.Context, msg whatsapp.IncomingMe
 	a.logger.Printf("[claude-agent] Processing message from %s (chat: %s): %s",
 		msg.SenderJID, msg.ChatJID, truncateForLog(msg.Body, 100))
 
-	// Check for reset keyword (case-insensitive)
+	// Check for slash commands and legacy reset keyword
+	if cmd := ParseCommand(msg.Body); cmd != nil {
+		a.handleCommand(ctx, msg.ChatJID, cmd)
+		return
+	}
 	if strings.EqualFold(strings.TrimSpace(msg.Body), a.resetKeyword) {
-		oldSession := a.getSessionID(msg.ChatJID)
-		a.clearSession(msg.ChatJID)
-		a.logger.Printf("[claude-agent] Session reset for chat %s: %s -> (new)", msg.ChatJID, oldSession)
-		a.sendReply(ctx, msg.ChatJID, "Session restarted. Conversation context has been cleared.")
+		a.handleCommand(ctx, msg.ChatJID, &Command{Name: "reset"})
 		return
 	}
 
@@ -165,7 +185,12 @@ Respond directly to the user's message.`,
 	}
 
 	// Execute Claude CLI with --resume to maintain per-chat session context
-	response, err := a.executeClaudeCLI(ctx, msg.ChatJID, prompt)
+	// Use the agent's context so cancellation propagates on shutdown
+	a.wg.Add(1)
+	defer a.wg.Done()
+	execCtx, execCancel := context.WithCancel(a.ctx)
+	defer execCancel()
+	response, err := a.executeClaudeCLI(execCtx, msg.ChatJID, prompt)
 	if err != nil {
 		a.logger.Printf("[claude-agent] CLI error: %v", err)
 		response = fmt.Sprintf("Sorry, I encountered an error: %v", err)
@@ -207,6 +232,11 @@ func (a *ClaudeAgent) executeClaudeCLI(ctx context.Context, chatJID, prompt stri
 			strings.ReplaceAll(a.officeClawPath, `\`, `\\`)) // Escape backslashes for JSON
 		args = append(args, "--mcp-config", mcpConfig)
 		a.logger.Printf("[claude-agent] MCP server configured: %s", a.officeClawPath)
+	}
+
+	// Apply model override if set for this chat
+	if model := a.getChatModel(chatJID); model != "" {
+		args = append(args, "--model", model)
 	}
 
 	// Only use --resume if we have an existing session for this chat
@@ -322,18 +352,85 @@ func parseStreamJSONOutput(output string) (string, string) {
 	return response, sessionID
 }
 
+// handleCommand processes a slash command for the Claude agent.
+func (a *ClaudeAgent) handleCommand(ctx context.Context, chatJID string, cmd *Command) {
+	switch cmd.Name {
+	case "reset":
+		oldSession := a.getSessionID(chatJID)
+		a.clearSession(chatJID)
+		a.logger.Printf("[claude-agent] Session reset for chat %s: %s -> (new)", chatJID, oldSession)
+		a.sendReply(ctx, chatJID, "Session restarted. Conversation context has been cleared.")
+
+	case "model":
+		if cmd.Args == "" {
+			current := a.getChatModel(chatJID)
+			if current == "" {
+				current = "(default)"
+			}
+			a.sendReply(ctx, chatJID, fmt.Sprintf("Current model: %s\nUse /model <name> to switch.", current))
+		} else {
+			a.setChatModel(chatJID, cmd.Args)
+			a.logger.Printf("[claude-agent] Model set to %q for chat %s", cmd.Args, chatJID)
+			a.sendReply(ctx, chatJID, fmt.Sprintf("Model switched to: %s", cmd.Args))
+		}
+
+	case "models":
+		known := DefaultKnownModels()
+		current := a.getChatModel(chatJID)
+		a.sendReply(ctx, chatJID, FormatModelList("Claude", known.Claude, current))
+
+	case "help":
+		a.sendReply(ctx, chatJID, CommandHelpText("OCC"))
+
+	default:
+		a.sendReply(ctx, chatJID, fmt.Sprintf("Unknown command: /%s\n\n%s", cmd.Name, CommandHelpText("OCC")))
+	}
+}
+
+// getChatModel returns the model override for a chat, or empty for default.
+func (a *ClaudeAgent) getChatModel(chatJID string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.chatModels[chatJID]
+}
+
+// setChatModel sets a model override for a chat.
+func (a *ClaudeAgent) setChatModel(chatJID, model string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.chatModels[chatJID] = model
+}
+
 // sendReply sends a message back via WhatsApp.
+// On failure, the message is saved to the pending queue for retry on next startup.
 func (a *ClaudeAgent) sendReply(ctx context.Context, chatJID, message string) {
 	if err := a.waClient.SendMessage(ctx, chatJID, message); err != nil {
 		a.logger.Printf("[claude-agent] Failed to send reply: %v", err)
+		if a.pendingQueue != nil {
+			a.pendingQueue.Add(chatJID, message)
+		}
 	} else {
 		a.logger.Printf("[claude-agent] Sent reply to %s (%d chars)", chatJID, len(message))
 	}
 }
 
-// Stop is a no-op for this implementation (no persistent process).
+// Stop cancels running CLI sessions and waits for them to finish (up to 30s).
 func (a *ClaudeAgent) Stop() {
-	// Nothing to stop - each request is a separate CLI invocation
+	a.logger.Printf("[claude-agent] Stopping: cancelling running CLI sessions")
+	a.cancel()
+
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		a.logger.Printf("[claude-agent] All CLI sessions finished")
+	case <-time.After(30 * time.Second):
+		a.logger.Printf("[claude-agent] Timeout waiting for CLI sessions")
+	}
 }
 
 // findClaudeCLI locates the Claude CLI executable.

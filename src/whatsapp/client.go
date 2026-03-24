@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
@@ -27,6 +28,7 @@ type MessageMode string
 const (
 	ModeOfficeClaw MessageMode = "officeclaw" // Custom OfficeClaw agent
 	ModeClaude     MessageMode = "claude"     // Direct Claude CLI agent
+	ModeCopilot    MessageMode = "copilot"    // Direct Copilot CLI agent
 )
 
 // Client wraps the whatsmeow client for WhatsApp Web integration.
@@ -34,12 +36,21 @@ type Client struct {
 	client             *whatsmeow.Client
 	container          *sqlstore.Container
 	logger             *log.Logger
-	triggerPrefix      string       // e.g., "OfficeClaw:"
-	claudeTrigger      string       // e.g., "OfficeClaw-Claude:"
+	triggerPrefix      string       // e.g., "OC:"
+	claudeTrigger      string       // e.g., "OCC:"
+	copilotTrigger     string       // hardcoded "OCCO:"
 	machineName        string       // e.g., "office1" (for targeted messaging)
 	handler            MessageHandler
 	claudeHandler      MessageHandler
+	copilotHandler     MessageHandler
 	mu                 sync.RWMutex
+	wg                 sync.WaitGroup // tracks in-flight message handlers
+	shutdownCh         chan struct{}   // closed when shutdown starts
+
+	// Reconnection state
+	connected     bool
+	connMu        sync.Mutex
+	loggedOut     bool           // true if logged out (needs QR re-scan, don't auto-reconnect)
 }
 
 // MessageHandler is called when a trigger message is received.
@@ -60,9 +71,9 @@ type IncomingMessage struct {
 type Config struct {
 	// Path to SQLite database for session storage
 	DatabasePath string
-	// Trigger prefix for OfficeClaw agent (e.g., "OfficeClaw:")
+	// Trigger prefix for OfficeClaw agent (e.g., "OC:")
 	TriggerPrefix string
-	// Trigger prefix for Claude CLI agent (e.g., "OfficeClaw-Claude:")
+	// Trigger prefix for Claude CLI agent (e.g., "OCC:")
 	ClaudeTrigger string
 	// Default task when none specified
 	DefaultTask string
@@ -107,12 +118,14 @@ func New(cfg Config) (*Client, error) {
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	return &Client{
-		client:        client,
-		container:     container,
-		logger:        cfg.Logger,
-		triggerPrefix: cfg.TriggerPrefix,
-		claudeTrigger: cfg.ClaudeTrigger,
-		machineName:   cfg.MachineName,
+		client:         client,
+		container:      container,
+		logger:         cfg.Logger,
+		triggerPrefix:  cfg.TriggerPrefix,
+		claudeTrigger:  cfg.ClaudeTrigger,
+		copilotTrigger: "OCCO:",
+		machineName:    cfg.MachineName,
+		shutdownCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -169,17 +182,94 @@ func (c *Client) SetClaudeHandler(handler MessageHandler) {
 	c.claudeHandler = handler
 }
 
+// SetCopilotHandler sets the callback for incoming Copilot CLI agent trigger messages.
+func (c *Client) SetCopilotHandler(handler MessageHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.copilotHandler = handler
+}
+
 // eventHandler processes incoming WhatsApp events.
 func (c *Client) eventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		c.handleMessage(v)
 	case *events.Connected:
+		c.connMu.Lock()
+		c.connected = true
+		c.connMu.Unlock()
 		c.logger.Println("WhatsApp connected")
 	case *events.Disconnected:
+		c.connMu.Lock()
+		c.connected = false
+		c.connMu.Unlock()
 		c.logger.Println("WhatsApp disconnected")
 	case *events.LoggedOut:
-		c.logger.Println("WhatsApp logged out - please restart and scan QR code")
+		c.connMu.Lock()
+		c.connected = false
+		c.loggedOut = true
+		c.connMu.Unlock()
+		c.logger.Println("WhatsApp logged out - please restart and scan QR code (auto-reconnect disabled)")
+	}
+}
+
+// StartReconnectWatchdog monitors the WhatsApp connection and reconnects if it drops.
+// It runs until the context is cancelled (shutdown). Uses exponential backoff:
+// 5s → 10s → 20s → 40s → 60s (max).
+func (c *Client) StartReconnectWatchdog(ctx context.Context) {
+	const (
+		checkInterval  = 15 * time.Second
+		initialBackoff = 5 * time.Second
+		maxBackoff     = 60 * time.Second
+	)
+
+	backoff := initialBackoff
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case <-time.After(checkInterval):
+		}
+
+		c.connMu.Lock()
+		isConnected := c.connected
+		isLoggedOut := c.loggedOut
+		c.connMu.Unlock()
+
+		if isLoggedOut {
+			// Can't auto-reconnect after logout — needs QR code scan
+			continue
+		}
+
+		if isConnected || c.client.IsConnected() {
+			// Reset backoff on healthy connection
+			backoff = initialBackoff
+			continue
+		}
+
+		// Not connected — attempt reconnect
+		c.logger.Printf("WhatsApp not connected, attempting reconnect (backoff: %v)...", backoff)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		if err := c.client.Connect(); err != nil {
+			c.logger.Printf("WhatsApp reconnect failed: %v", err)
+			// Exponential backoff
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		} else {
+			c.logger.Printf("WhatsApp reconnect initiated")
+			backoff = initialBackoff
+		}
 	}
 }
 
@@ -198,28 +288,53 @@ func (c *Client) handleMessage(msg *events.Message) {
 
 	textLower := strings.ToLower(text)
 
-	// Determine which mode to use (check Claude trigger first since it's longer/more specific)
+	// Determine which mode to use.
+	// Check triggers longest-first to avoid prefix conflicts (e.g., "OC:" vs "OCC:" vs "OCP:")
 	var mode MessageMode
 	var prefix string
 	var handler MessageHandler
 
 	c.mu.RLock()
 	claudeTriggerLower := strings.ToLower(c.claudeTrigger)
+	copilotTriggerLower := strings.ToLower(c.copilotTrigger)
 	triggerPrefixLower := strings.ToLower(c.triggerPrefix)
 
-	if strings.HasPrefix(textLower, claudeTriggerLower) {
-		mode = ModeClaude
-		prefix = c.claudeTrigger
-		handler = c.claudeHandler
-	} else if strings.HasPrefix(textLower, triggerPrefixLower) {
-		mode = ModeOfficeClaw
-		prefix = c.triggerPrefix
-		handler = c.handler
-	} else {
-		c.mu.RUnlock()
-		return
+	// Build sorted trigger list (longer prefixes first)
+	type triggerEntry struct {
+		lower   string
+		prefix  string
+		mode    MessageMode
+		handler MessageHandler
+	}
+	triggers := []triggerEntry{
+		{claudeTriggerLower, c.claudeTrigger, ModeClaude, c.claudeHandler},
+		{copilotTriggerLower, c.copilotTrigger, ModeCopilot, c.copilotHandler},
+		{triggerPrefixLower, c.triggerPrefix, ModeOfficeClaw, c.handler},
+	}
+	// Sort by length descending (longest match first)
+	for i := 0; i < len(triggers)-1; i++ {
+		for j := i + 1; j < len(triggers); j++ {
+			if len(triggers[j].lower) > len(triggers[i].lower) {
+				triggers[i], triggers[j] = triggers[j], triggers[i]
+			}
+		}
+	}
+
+	matched := false
+	for _, t := range triggers {
+		if strings.HasPrefix(textLower, t.lower) {
+			mode = t.mode
+			prefix = t.prefix
+			handler = t.handler
+			matched = true
+			break
+		}
 	}
 	c.mu.RUnlock()
+
+	if !matched {
+		return
+	}
 
 	// Skip agent's own replies (messages from self that don't have trigger prefix were already filtered)
 	// We allow trigger messages from self so you can control your own agent
@@ -269,6 +384,14 @@ func (c *Client) handleMessage(msg *events.Message) {
 	c.logger.Printf("Trigger message from %s: mode=%s, task=%s", msg.Info.Sender.User, mode, taskName)
 
 	if handler != nil {
+		// Reject new messages during shutdown
+		select {
+		case <-c.shutdownCh:
+			c.logger.Printf("Rejecting message during shutdown from %s", msg.Info.Sender.User)
+			return
+		default:
+		}
+
 		incoming := IncomingMessage{
 			ID:        msg.Info.ID,
 			ChatJID:   msg.Info.Chat.String(),
@@ -278,7 +401,11 @@ func (c *Client) handleMessage(msg *events.Message) {
 			TaskName:  taskName,
 			Mode:      mode,
 		}
-		go handler(context.Background(), incoming)
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			handler(context.Background(), incoming)
+		}()
 	} else {
 		c.logger.Printf("No handler registered for mode %s", mode)
 	}
@@ -304,9 +431,56 @@ func (c *Client) SendMessage(ctx context.Context, chatJID string, text string) e
 	return nil
 }
 
-// Disconnect disconnects from WhatsApp.
+// GracefulDisconnect stops accepting new messages, waits for in-flight handlers
+// to complete (up to timeout), then disconnects.
+func (c *Client) GracefulDisconnect(timeout time.Duration) {
+	// Signal shutdown to stop accepting new messages
+	select {
+	case <-c.shutdownCh:
+		// Already shutting down
+	default:
+		close(c.shutdownCh)
+	}
+
+	c.logger.Printf("Waiting for in-flight handlers (timeout: %v)...", timeout)
+
+	// Wait for in-flight handlers with timeout
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		c.logger.Printf("All handlers completed")
+	case <-time.After(timeout):
+		c.logger.Printf("Shutdown timeout: some handlers still running")
+	}
+
+	c.client.Disconnect()
+}
+
+// Disconnect disconnects from WhatsApp immediately.
 func (c *Client) Disconnect() {
 	c.client.Disconnect()
+}
+
+// InFlightCount returns the number of in-flight handlers (approximate).
+// This is used for logging during shutdown.
+func (c *Client) InFlightCount() int {
+	// WaitGroup doesn't expose count, so we use a non-blocking check
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return 0
+	default:
+		return -1 // unknown but non-zero
+	}
 }
 
 // IsConnected returns whether the client is connected.

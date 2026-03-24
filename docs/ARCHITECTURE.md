@@ -2,7 +2,7 @@
 
 ## Overview
 
-OfficeClaw is an AI Agent system running as a Windows desktop application. It monitors WhatsApp for trigger messages, processes them through an LLM with tool-calling capabilities, and executes actions autonomously.
+OfficeClaw is an AI Agent system running as a Windows service or desktop application. It monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes actions autonomously.
 
 ## System Architecture
 
@@ -53,9 +53,23 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 │           │     │   configured)   │                            │
 │           │     └─────────────────┘                            │
 │           │                                                    │
+│           ├── "OCCO:" ────┐                                    │
+│           │               ▼                                    │
+│           │     ┌─────────────────┐                            │
+│           │     │ Copilot Agent   │   (session via --resume)   │
+│           │     │  (--allow-all)  │                            │
+│           │     └────────┬────────┘                            │
+│           │              │                                     │
+│           │              ▼                                     │
+│           │     ┌─────────────────┐                            │
+│           │     │  Copilot CLI    │   (full autonomy)          │
+│           │     │  (working folder│                            │
+│           │     │   configured)   │                            │
+│           │     └─────────────────┘                            │
+│           │                                                    │
 │  ┌──────────────────┐  ┌────────────────────────┐             │
-│  │  OpenTelemetry   │  │     System Tray        │             │
-│  │  + Prometheus    │  │    (Windows GUI)       │             │
+│  │  OpenTelemetry   │  │  System Tray / Service │             │
+│  │  + Prometheus    │  │  (Windows GUI / SCM)   │             │
 │  └──────────────────┘  └────────────────────────┘             │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -64,19 +78,23 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 
 | Package     | Responsibility                                          |
 |-------------|--------------------------------------------------------|
-| `main`      | Entry point, dependency wiring, signal handling         |
+| `main`      | Entry point, dependency wiring, signal handling, service/MCP subcommands |
 | `config`    | YAML config loading, validation, env var overrides      |
-| `whatsapp`  | WhatsApp Web integration via whatsmeow library          |
-| `llm`       | Multi-provider LLM client (Claude CLI, Azure, OpenAI)   |
-| `agent`     | Core agent loop: LLM ↔ tool-call orchestration          |
+| `whatsapp`  | WhatsApp Web integration via whatsmeow, auto-reconnection |
+| `llm`       | Multi-provider LLM client (Claude CLI, Copilot CLI, Azure, OpenAI) |
+| `agent`     | Core agent loop, Claude/Copilot CLI agents, unified command system |
 | `tools`     | Extensible tool registry + built-in tools               |
 | `tasks`     | Task definitions, executor with timeout, cron scheduler |
-| `tray`      | Windows system tray icon and menu                       |
+| `mcp`       | MCP server for exposing tools to CLI agents             |
+| `memory`    | HTTP client for LLMCrawl's memory service               |
+| `service`   | Windows Service integration (install/uninstall, SCM handler) |
+| `pending`   | Persistent message queue for unsent replies              |
+| `tray`      | Windows system tray icon and menu (interactive mode)     |
 | `telemetry` | OpenTelemetry tracing + Prometheus metrics              |
 
-## Two Operating Modes
+## Three Operating Modes
 
-OfficeClaw supports two trigger prefixes (both case-insensitive):
+OfficeClaw supports three trigger prefixes (all case-insensitive):
 
 ### OC: Mode (OfficeClaw Agent)
 Uses the custom OfficeClaw agent with tool orchestration:
@@ -92,17 +110,40 @@ Uses the custom OfficeClaw agent with tool orchestration:
 Invokes Claude CLI directly as an autonomous agent with **session persistence via `--resume`**:
 1. WhatsApp listener detects a message starting with "OCC:"
 2. Claude CLI is spawned with `-p --dangerously-skip-permissions --resume <session-id>`
-3. Claude CLI runs in the configured `claude_working_folder`
-4. Claude executes autonomously using its built-in tools
-5. Final response is sent back via WhatsApp
-6. **Session ID is preserved** - subsequent OCC: messages use the same session ID to maintain context
+3. OfficeClaw configures itself as MCP server via `--mcp-config`
+4. Claude CLI runs in the configured `claude_working_folder`
+5. Claude executes autonomously using its built-in tools + OfficeClaw tools via MCP
+6. Final response is sent back via WhatsApp
 
-**Session Management**:
+### OCCO: Mode (Copilot CLI Agent)
+Invokes GitHub Copilot CLI as an autonomous agent with **session persistence via `--resume`**:
+1. WhatsApp listener detects a message starting with "OCCO:"
+2. Copilot CLI is spawned with `-p --allow-all --output-format json --resume=<sessionId>`
+3. OfficeClaw configures itself as MCP server via `--additional-mcp-config`
+4. Copilot CLI runs in the configured `copilot_working_folder`
+5. Copilot executes autonomously using its built-in tools + OfficeClaw tools via MCP
+6. Final response extracted from JSONL output and sent back via WhatsApp
+
+### Session Management
 - Each request spawns a new CLI process but uses `--resume` with the same session ID
 - This maintains conversation context across requests
-- Send `OCC: reset` (or configured keyword) to get a new session ID and start fresh
+- Send `/reset` to clear the session and start fresh
 
-The OCC: mode bypasses the OfficeClaw agent loop entirely, giving Claude CLI full control with all permissions auto-approved.
+### Unified Command System
+All modes support slash commands: `/reset`, `/model`, `/models`, `/help`.
+OCCO: mode additionally supports `/effort` for reasoning effort levels.
+OC: mode additionally supports `/clear` and `/summary`.
+
+### Machine Targeting
+Messages can target specific machines: `OCC:<home>: hello` — only the machine named "home" responds. Works with all trigger prefixes.
+
+### Graceful Shutdown
+On shutdown (signal, service stop, or tray quit):
+1. Stops accepting new WhatsApp messages
+2. Cancels running CLI sessions (30s timeout)
+3. Waits for in-flight message handlers to complete
+4. Saves unsent replies to `pending_messages.json` for retry on next startup
+5. Disconnects WhatsApp
 
 ## WhatsApp Integration
 
@@ -120,6 +161,11 @@ OfficeClaw uses the [whatsmeow](https://github.com/tulir/whatsmeow) library for 
 - No API key required
 - CLI spawned as subprocess with `--output-format stream-json`
 - Handles authentication via your organization's SSO
+
+**GitHub Copilot**: Uses the Copilot CLI with GitHub OAuth authentication:
+- No API key required
+- CLI spawned as subprocess with `--output-format json` (JSONL)
+- Supports reasoning effort levels (low/medium/high/xhigh)
 
 **Azure OpenAI / OpenAI**: Traditional API key authentication
 

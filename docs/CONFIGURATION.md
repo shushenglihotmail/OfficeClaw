@@ -8,9 +8,12 @@ whatsapp:
   database_path: "whatsapp.db"    # SQLite database for session storage
   trigger_prefix: "OC:"           # Prefix for OfficeClaw agent mode
   claude_trigger: "OCC:"          # Prefix for direct Claude CLI agent mode
+  # Copilot CLI trigger is hardcoded as "OCCO:" (not configurable)
   claude_working_folder: "C:\\Projects\\MyRepo"  # Working folder for Claude CLI
-  claude_session_reset_keyword: "reset"  # Keyword to reset session (e.g., "OCC: reset")
+  copilot_working_folder: ""      # Working folder for Copilot CLI (defaults to claude_working_folder)
+  claude_session_reset_keyword: "reset"  # Keyword to reset session (legacy, prefer /reset command)
   default_task: "assist"          # Task when none specified in OC: trigger
+  machine_name: "office1"         # Unique name for targeted messaging
 
 # LLM provider
 llm:
@@ -21,6 +24,12 @@ llm:
   # Claude via CLI (recommended - uses SSO auth, no API key needed)
   anthropic:
     model: "claude-sonnet-4-20250514"
+    max_tokens: 8192
+    cli_path: ""                  # Auto-detected if empty
+
+  # GitHub Copilot CLI (uses GitHub OAuth, no API key needed)
+  copilot:
+    model: ""                     # Empty = Copilot default
     max_tokens: 8192
     cli_path: ""                  # Auto-detected if empty
 
@@ -56,6 +65,10 @@ tools:
     keep_alive_enabled: true      # Periodically reconnect if VPN drops
     keep_alive_minutes: 30
     # verify_path: "\\\\server\\share"  # Optional UNC path to verify connectivity
+  memory:
+    service_url: "http://localhost:8007"  # Leave empty to disable memory features
+    flush_threshold: 0.8          # Context % to trigger automatic distillation
+    max_context_tokens: 100000
 
 # Tasks (only predefined tasks can be executed)
 tasks:
@@ -152,11 +165,28 @@ llm:
 
 Or set `OPENAI_API_KEY` environment variable.
 
+### GitHub Copilot
+
+Uses the Copilot CLI with GitHub OAuth authentication:
+
+1. Install Copilot CLI
+2. Run `copilot login` to authenticate
+3. OfficeClaw will auto-detect and use the CLI
+
+```yaml
+llm:
+  provider: "copilot"
+  copilot:
+    model: ""         # Empty = Copilot default
+    cli_path: ""      # Auto-detected
+```
+
 ## Environment Variable Overrides
 
 | Env Var | Config Path |
 |---------|-------------|
 | `CLAUDE_CLI_PATH` | `llm.anthropic.cli_path` |
+| `COPILOT_CLI_PATH` | `llm.copilot.cli_path` |
 | `AZURE_OPENAI_ENDPOINT` | `llm.azure.endpoint` |
 | `AZURE_OPENAI_API_KEY` | `llm.azure.api_key` |
 | `OPENAI_API_KEY` | `llm.openai.api_key` |
@@ -164,7 +194,7 @@ Or set `OPENAI_API_KEY` environment variable.
 
 ## Trigger Message Format
 
-OfficeClaw supports two trigger modes (both case-insensitive):
+OfficeClaw supports three trigger modes (all case-insensitive):
 
 ### OC: Mode (OfficeClaw Agent)
 Uses the OfficeClaw agent with custom tools (file access, task execution, messaging):
@@ -184,8 +214,6 @@ If no task name is provided, the `default_task` is used.
 Invokes Claude CLI directly as an autonomous agent with auto-approval of all tool requests.
 Claude runs in the configured `claude_working_folder` with full tool access.
 
-**Session Persistence**: Uses `--resume <session-id>` to maintain conversation context across messages. Each request spawns a new CLI process but uses the same session ID, so Claude remembers previous messages.
-
 ```
 OCC: <request>
 ```
@@ -194,17 +222,53 @@ Examples:
 - `OCC: refactor the main.go file`
 - `OCC: analyze this codebase and suggest improvements`
 - `OCC: help me debug the failing tests`
-- `OCC: remember my name is Bob` → later: `OCC: what's my name?` (remembers "Bob")
 
-**Resetting the Session**: Send the reset keyword to get a new session ID and start fresh:
+### OCCO: Mode (Copilot CLI Agent)
+Invokes GitHub Copilot CLI as an autonomous agent with `--allow-all` auto-approval.
+Copilot runs in the configured `copilot_working_folder` with full tool access.
+
 ```
-OCC: reset
+OCCO: <request>
 ```
-Response: "Session restarted. Conversation context has been cleared."
 
-The reset keyword is configurable via `claude_session_reset_keyword` (default: "reset").
+Examples:
+- `OCCO: review the latest changes`
+- `OCCO: help me write unit tests`
 
-This mode bypasses the OfficeClaw agent and gives Claude CLI full autonomy.
+### Session Persistence
+Both CLI agents maintain conversation context across messages using `--resume`. Each request spawns a new CLI process but reuses the same session ID.
+
+### Machine Targeting
+When multiple OfficeClaw instances share one WhatsApp account, target specific machines:
+```
+OCC:<home>: refactor main.go       # Only "home" responds
+OC:<home, office>: check status    # Both respond
+OC: hello                           # All respond
+```
+
+Machine names are configured via `whatsapp.machine_name`. Matching is case-insensitive.
+
+### Slash Commands
+All modes support slash commands sent as the message body:
+
+| Command | Modes | Description |
+|---------|-------|-------------|
+| `/reset` | All | Clear session and start fresh |
+| `/model <name> [effort]` | All | Switch model (effort: low/medium/high/xhigh for OCCO: only) |
+| `/models` | All | List available models with current marked |
+| `/help` | All | Show available commands |
+| `/clear` | OC: | Clear conversation context |
+| `/summary` | OC: | Extract and save summary/facts to memory |
+| `/effort <level>` | OCCO: | Set reasoning effort (low/medium/high/xhigh) |
+
+Examples:
+```
+OCC: /models
+OCC: /model opus
+OCCO: /model gpt-5.4 high
+OCCO: /effort xhigh
+OC: /reset
+```
 
 ## MCP Server (Model Context Protocol)
 

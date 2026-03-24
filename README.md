@@ -4,12 +4,16 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 
 ## Features
 
-- **24/7 Background Agent**: Runs as a Windows desktop app with system tray icon
-- **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web
-- **Multi-Provider LLM**: Claude (via CLI with SSO), Azure OpenAI, OpenAI — extensible to more
+- **24/7 Background Agent**: Runs as a Windows service or desktop app with system tray icon
+- **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web with auto-reconnection
+- **Multi-Provider LLM**: Claude (via CLI with SSO), GitHub Copilot (via CLI), Azure OpenAI, OpenAI
+- **Three Agent Modes**: OC: (custom agent), OCC: (Claude CLI), OCCO: (Copilot CLI)
 - **Extensible Tool System**: Reply to messages, read local files, execute tasks, view task logs, manage VPN
 - **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and WhatsApp notifications
-- **MCP Server**: Exposes OfficeClaw tools to Claude CLI for seamless integration
+- **MCP Server**: Exposes OfficeClaw tools to Claude CLI and Copilot CLI for seamless integration
+- **Unified Command System**: `/model`, `/models`, `/reset`, `/effort` and more across all modes
+- **Machine Targeting**: Route messages to specific machines when multiple instances share one WhatsApp account
+- **Windows Service**: Auto-start, auto-recovery on failure, graceful shutdown with pending message queue
 - **Observability**: OpenTelemetry + Prometheus metrics
 
 ## How It Works
@@ -30,13 +34,36 @@ Invokes Claude CLI directly as an autonomous agent with auto-approval of all too
 OCC: refactor the main.go file to use dependency injection
 OCC: analyze this codebase and suggest improvements
 OCC: help me debug the failing test
-OCC: show me the logs from the last setupbuild task
 ```
-Claude CLI runs in the configured `claude_working_folder` with full tool access. OfficeClaw automatically configures itself as an MCP server, giving Claude access to OfficeClaw tools (task execution, file access, task logs, VPN) alongside its native tools.
 
-**Persistent Session**: The session maintains context across messages. Send `OCC: reset` to clear context and start fresh.
+### OCCO: Mode (Copilot CLI Agent)
+Invokes GitHub Copilot CLI as an autonomous agent:
+```
+OCCO: review the latest changes and suggest improvements
+OCCO: help me write unit tests for the agent package
+```
 
-Both triggers are **case-insensitive** (e.g., `oc:`, `OC:`, `Oc:` all work).
+Both CLI agents run in their configured working folders with full tool access. OfficeClaw automatically configures itself as an MCP server, giving the CLI access to OfficeClaw tools (task execution, file access, task logs, VPN) alongside its native tools.
+
+### Slash Commands
+All modes support slash commands sent after the trigger prefix:
+```
+OCC: /models              # List available Claude models
+OCC: /model opus          # Switch to Opus
+OCCO: /model gpt-5.4 high # Switch model with reasoning effort
+OCCO: /effort xhigh       # Change reasoning effort only
+OCC: /reset               # Clear session and start fresh
+```
+
+### Machine Targeting
+When multiple OfficeClaw instances share one WhatsApp account:
+```
+OCC:<home>: refactor main.go     # Only "home" machine responds
+OC:<home, office>: check disk    # Both respond
+OC: hello                         # All machines respond
+```
+
+All triggers are **case-insensitive** (e.g., `oc:`, `OC:`, `Oc:` all work).
 
 ## Quick Start
 
@@ -48,8 +75,12 @@ make build-console
 cp config.example.yaml config.yaml
 # Edit config.yaml if needed
 
-# Run
+# Run interactively (with system tray)
 ./build/officeclaw.exe
+
+# Or install as Windows service (run as admin)
+./build/officeclaw.exe service install
+net start OfficeClaw
 ```
 
 On first run, scan the QR code with your WhatsApp mobile app to link the session.
@@ -60,12 +91,16 @@ On first run, scan the QR code with your WhatsApp mobile app to link the session
 OfficeClaw/
 ├── src/                    # Source code
 │   ├── main.go             # Entry point
-│   ├── agent/              # Core agent orchestrator
+│   ├── agent/              # Core agent orchestrator + CLI agents
 │   ├── whatsapp/           # WhatsApp Web integration
 │   ├── config/             # Configuration management
 │   ├── llm/                # LLM provider integrations
 │   ├── tools/              # Extensible tool system
 │   ├── tasks/              # Task execution & scheduling
+│   ├── mcp/                # MCP server for CLI integration
+│   ├── memory/             # Memory service client
+│   ├── service/            # Windows service integration
+│   ├── pending/            # Pending message queue
 │   ├── tray/               # Windows system tray
 │   └── telemetry/          # OpenTelemetry + Prometheus
 ├── docs/                   # Documentation

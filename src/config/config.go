@@ -29,6 +29,8 @@ type WhatsAppConfig struct {
 	ClaudeTrigger string `yaml:"claude_trigger"`
 	// Working folder for Claude CLI agent
 	ClaudeWorkingFolder string `yaml:"claude_working_folder"`
+	// Working folder for Copilot CLI agent (defaults to claude_working_folder)
+	CopilotWorkingFolder string `yaml:"copilot_working_folder"`
 	// Keyword to reset Claude CLI session (e.g., send "OCC: reset")
 	ClaudeSessionResetKeyword string `yaml:"claude_session_reset_keyword"`
 	// Default task when none specified in message
@@ -43,6 +45,7 @@ type LLMConfig struct {
 	Anthropic             AnthropicConfig `yaml:"anthropic"`
 	Azure                 AzureConfig     `yaml:"azure"`
 	OpenAI                OpenAIConfig    `yaml:"openai"`
+	Copilot               CopilotConfig   `yaml:"copilot"`
 	Temperature           float64         `yaml:"temperature"`
 	RequestTimeoutSeconds int             `yaml:"request_timeout_seconds"`
 }
@@ -77,6 +80,14 @@ type OpenAIConfig struct {
 	APIKey    string `yaml:"api_key"`
 	Model     string `yaml:"model"`
 	MaxTokens int    `yaml:"max_tokens"`
+}
+
+// CopilotConfig for GitHub Copilot CLI integration.
+type CopilotConfig struct {
+	Model     string `yaml:"model"`     // Model to use (empty = Copilot default, e.g., "gpt-5.4")
+	MaxTokens int    `yaml:"max_tokens"`
+	// Path to Copilot CLI executable (auto-detected if empty)
+	CLIPath string `yaml:"cli_path"`
 }
 
 // ToolsConfig holds per-tool settings.
@@ -219,6 +230,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.WhatsApp.ClaudeSessionResetKeyword == "" {
 		cfg.WhatsApp.ClaudeSessionResetKeyword = "reset"
 	}
+	if cfg.WhatsApp.CopilotWorkingFolder == "" {
+		cfg.WhatsApp.CopilotWorkingFolder = cfg.WhatsApp.ClaudeWorkingFolder
+	}
 	// ClaudeWorkingFolder defaults to current directory if not set
 	if cfg.WhatsApp.DefaultTask == "" {
 		cfg.WhatsApp.DefaultTask = "assist"
@@ -308,6 +322,9 @@ func (c *Config) Validate() error {
 		if c.LLM.OpenAI.APIKey == "" {
 			errs = append(errs, "llm.openai.api_key is required (or set OPENAI_API_KEY)")
 		}
+	case "copilot":
+		// Uses Copilot CLI with GitHub auth - no API key required
+		// CLI path is auto-detected if not specified
 	default:
 		errs = append(errs, fmt.Sprintf("unsupported llm.provider: %s", c.LLM.Provider))
 	}

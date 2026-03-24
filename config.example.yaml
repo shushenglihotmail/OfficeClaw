@@ -14,6 +14,8 @@ whatsapp:
   # Working folder for Claude CLI agent (used with OCC: trigger)
   # Claude will execute with this as its working directory
   claude_working_folder: "C:\\Projects\\MyRepo"
+  # Working folder for Copilot CLI agent (defaults to claude_working_folder if empty)
+  copilot_working_folder: ""
   # Keyword to reset the Claude CLI session and clear conversation context
   # Send "OCC: reset" to restart the session (case-insensitive)
   # The session persists across messages, maintaining context until reset
@@ -50,6 +52,14 @@ llm:
     api_key: ""  # Or use OPENAI_API_KEY env var
     model: "gpt-4"
     max_tokens: 8192
+
+  # GitHub Copilot CLI configuration
+  # Uses the Copilot CLI with GitHub OAuth authentication.
+  # No API key required - the CLI must be pre-authenticated (run `copilot login`).
+  copilot:
+    model: ""         # Empty = Copilot default (e.g., gpt-5.4)
+    max_tokens: 8192
+    cli_path: ""      # Auto-detected if empty
 
   # Request settings
   temperature: 0.1
