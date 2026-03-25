@@ -133,6 +133,14 @@ All modes support slash commands: `/reset`, `/model`, `/models`, `/help`.
 OCCO: mode additionally supports `/effort` for reasoning effort levels.
 OC: mode additionally supports `/clear` and `/summary`.
 
+### Global Commands
+Global commands are handled at the WhatsApp layer before agent dispatch, so they work regardless of which agent mode is used:
+- `/mute` — Mute this instance (only `/unmute` and `/ping` will be processed while muted)
+- `/unmute` — Unmute this instance
+- `/ping` — Show machine name, mute state, and available modes
+
+Mute state is in-memory and resets to unmuted on restart. Machine targeting works with global commands (e.g., `OCC: @home /mute`).
+
 ### Machine Targeting
 Messages can target specific machines: `OCC: @home hello` — only the machine named "home" responds. Machine names are resolved automatically from the OS hostname (first segment of FQDN). Works with all trigger prefixes.
 

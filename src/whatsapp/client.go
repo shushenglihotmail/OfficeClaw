@@ -44,6 +44,7 @@ type Client struct {
 	handler            MessageHandler
 	claudeHandler      MessageHandler
 	copilotHandler     MessageHandler
+	muted              bool           // true when instance is muted via /mute command
 	mu                 sync.RWMutex
 	wg                 sync.WaitGroup // tracks in-flight message handlers
 	shutdownCh         chan struct{}   // closed when shutdown starts
@@ -376,6 +377,38 @@ func (c *Client) handleMessage(msg *events.Message) {
 		content = remaining
 	}
 
+	// Global commands: /ping, /unmute, /mute — handled before any agent dispatch.
+	chatJID := msg.Info.Chat.String()
+	contentLower := strings.ToLower(strings.TrimSpace(content))
+	if contentLower == "/ping" {
+		c.handlePingCommand(chatJID)
+		return
+	}
+	if contentLower == "/unmute" {
+		c.SetMuted(false)
+		c.logger.Printf("Unmuted by %s", msg.Info.Sender.User)
+		go func() {
+			if err := c.SendMessage(context.Background(), chatJID, fmt.Sprintf("Machine %s is now unmuted.", c.machineName)); err != nil {
+				c.logger.Printf("Failed to send unmute reply: %v", err)
+			}
+		}()
+		return
+	}
+	if contentLower == "/mute" {
+		c.SetMuted(true)
+		c.logger.Printf("Muted by %s", msg.Info.Sender.User)
+		go func() {
+			if err := c.SendMessage(context.Background(), chatJID, "I am in mute state now. I will only respond to /unmute and /ping commands."); err != nil {
+				c.logger.Printf("Failed to send mute reply: %v", err)
+			}
+		}()
+		return
+	}
+	if c.IsMuted() {
+		c.logger.Printf("Muted: ignoring message from %s", msg.Info.Sender.User)
+		return
+	}
+
 	// Parse task name (first word) or use default - only for OfficeClaw mode
 	taskName := "assist"
 	if mode == ModeOfficeClaw {
@@ -425,7 +458,6 @@ func (c *Client) handleMessage(msg *events.Message) {
 		default:
 			reply = fmt.Sprintf("No handler available for mode %s.", mode)
 		}
-		chatJID := msg.Info.Chat.String()
 		go func() {
 			if err := c.SendMessage(context.Background(), chatJID, reply); err != nil {
 				c.logger.Printf("Failed to send unavailable-agent reply: %v", err)
@@ -514,6 +546,52 @@ func (c *Client) IsConnected() bool {
 // MachineName returns the resolved machine name (short hostname).
 func (c *Client) MachineName() string {
 	return c.machineName
+}
+
+// IsMuted returns whether this instance is muted.
+func (c *Client) IsMuted() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.muted
+}
+
+// SetMuted sets the muted state of this instance.
+func (c *Client) SetMuted(muted bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.muted = muted
+}
+
+// handlePingCommand sends a ping response with machine info to the given chat.
+func (c *Client) handlePingCommand(chatJID string) {
+	state := "active"
+	if c.IsMuted() {
+		state = "muted"
+	}
+
+	// Check which modes are available based on registered handlers
+	c.mu.RLock()
+	ocAvail := c.handler != nil
+	occAvail := c.claudeHandler != nil
+	occoAvail := c.copilotHandler != nil
+	c.mu.RUnlock()
+
+	check := func(avail bool) string {
+		if avail {
+			return "✓"
+		}
+		return "✗"
+	}
+
+	reply := fmt.Sprintf("Machine: %s\nState: %s\nModes: OC %s | OCC %s | OCCO %s",
+		c.machineName, state,
+		check(ocAvail), check(occAvail), check(occoAvail))
+
+	go func() {
+		if err := c.SendMessage(context.Background(), chatJID, reply); err != nil {
+			c.logger.Printf("Failed to send ping reply: %v", err)
+		}
+	}()
 }
 
 // ParseMachineTarget parses the @machine targeting syntax from message content.

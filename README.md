@@ -11,7 +11,7 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 - **Extensible Tool System**: Reply to messages, read local files, execute tasks, view task logs, manage VPN
 - **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and WhatsApp notifications
 - **MCP Server**: Exposes OfficeClaw tools to Claude CLI and Copilot CLI for seamless integration
-- **Unified Command System**: `/model`, `/models`, `/reset`, `/effort` and more across all modes
+- **Unified Command System**: `/model`, `/models`, `/reset`, `/effort`, `/mute`, `/unmute`, `/ping` and more across all modes
 - **Machine Targeting**: Route messages to specific machines when multiple instances share one WhatsApp account
 - **Graceful Shutdown**: Pending message queue for reliability
 - **Observability**: OpenTelemetry + Prometheus metrics
@@ -53,6 +53,9 @@ OCC: /model opus          # Switch to Opus
 OCCO: /model gpt-5.4 high # Switch model with reasoning effort
 OCCO: /effort xhigh       # Change reasoning effort only
 OCC: /reset               # Clear session and start fresh
+OCC: /ping                # Show machine name, state, and modes
+OCC: /mute                # Mute this instance (only /unmute and /ping work)
+OCC: /unmute              # Unmute this instance
 ```
 
 ### Machine Targeting

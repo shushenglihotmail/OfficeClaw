@@ -143,5 +143,9 @@ func CommandHelpText(mode string) string {
 	}
 
 	sb.WriteString("  /help     - Show this help\n")
+	sb.WriteString("\nGlobal commands (all modes):\n")
+	sb.WriteString("  /mute     - Mute this instance (only /unmute and /ping will work)\n")
+	sb.WriteString("  /unmute   - Unmute this instance\n")
+	sb.WriteString("  /ping     - Show machine name, state, and available modes\n")
 	return sb.String()
 }

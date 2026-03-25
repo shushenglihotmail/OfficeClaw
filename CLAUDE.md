@@ -370,6 +370,11 @@ OfficeClaw has a unified slash command system that works across all agent modes.
 - `/models` — List available models for the current agent, with current model marked
 - `/help` — Show available commands
 
+**Global commands (handled at WhatsApp layer, before agent dispatch)**:
+- `/mute` — Mute this instance; only `/unmute` and `/ping` will be processed while muted
+- `/unmute` — Unmute this instance
+- `/ping` — Show machine name, mute state, and available modes (OC ✓/✗ | OCC ✓/✗ | OCCO ✓/✗)
+
 **OC: mode only**:
 - `/clear` — Clear conversation context and start a new session
 - `/summary` — Force distillation to extract and save summary/facts

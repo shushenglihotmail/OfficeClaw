@@ -257,6 +257,9 @@ All modes support slash commands sent as the message body:
 | `/model <name> [effort]` | All | Switch model (effort: low/medium/high/xhigh for OCCO: only) |
 | `/models` | All | List available models with current marked |
 | `/help` | All | Show available commands |
+| `/mute` | Global | Mute this instance (only `/unmute` and `/ping` will work) |
+| `/unmute` | Global | Unmute this instance |
+| `/ping` | Global | Show machine name, mute state, and available modes |
 | `/clear` | OC: | Clear conversation context |
 | `/summary` | OC: | Extract and save summary/facts to memory |
 | `/effort <level>` | OCCO: | Set reasoning effort (low/medium/high/xhigh) |
