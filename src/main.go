@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -82,7 +83,6 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 		TriggerPrefix: cfg.WhatsApp.TriggerPrefix,
 		ClaudeTrigger: cfg.WhatsApp.ClaudeTrigger,
 		DefaultTask:   cfg.WhatsApp.DefaultTask,
-		MachineName:   cfg.WhatsApp.MachineName,
 		Logger:        logger,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	}
 
 	// Identity tool (always registered — lightweight read-only tool)
-	toolRegistry.Register(tools.NewIdentityTool(cfg.WhatsApp.MachineName))
+	toolRegistry.Register(tools.NewIdentityTool(waClient.MachineName()))
 
 	// Initialize memory client (optional - graceful degradation if service not available)
 	var memoryClient *memory.Client
@@ -378,7 +378,7 @@ func runMCPServer() {
 	}
 
 	// Identity tool (always registered — lightweight read-only tool)
-	toolRegistry.Register(tools.NewIdentityTool(cfg.WhatsApp.MachineName))
+	toolRegistry.Register(tools.NewIdentityTool(resolveShortHostname()))
 
 	// Initialize memory client for MCP server
 	if cfg.Tools.Memory.ServiceURL != "" {
@@ -416,4 +416,16 @@ func runMCPServer() {
 	if err := server.Run(ctx); err != nil {
 		logger.Fatalf("MCP server error: %v", err)
 	}
+}
+
+// resolveShortHostname returns the lowercase short hostname (first segment of FQDN).
+func resolveShortHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	if idx := strings.IndexByte(hostname, '.'); idx != -1 {
+		return strings.ToLower(hostname[:idx])
+	}
+	return strings.ToLower(hostname)
 }

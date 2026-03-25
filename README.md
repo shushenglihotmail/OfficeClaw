@@ -58,8 +58,8 @@ OCC: /reset               # Clear session and start fresh
 ### Machine Targeting
 When multiple OfficeClaw instances share one WhatsApp account:
 ```
-OCC:<home>: refactor main.go     # Only "home" machine responds
-OC:<home, office>: check disk    # Both respond
+OCC: @home refactor main.go      # Only "home" machine responds
+OC: @home,office check disk      # Both respond
 OC: hello                         # All machines respond
 ```
 

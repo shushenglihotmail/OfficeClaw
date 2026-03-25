@@ -13,7 +13,7 @@ whatsapp:
   copilot_working_folder: ""      # Working folder for Copilot CLI (defaults to claude_working_folder)
   claude_session_reset_keyword: "reset"  # Keyword to reset session (legacy, prefer /reset command)
   default_task: "assist"          # Task when none specified in OC: trigger
-  machine_name: "office1"         # Unique name for targeted messaging
+  # Machine name is auto-detected from OS hostname (not configurable)
 
 # LLM provider (optional — leave empty to disable OC: mode)
 llm:
@@ -241,12 +241,12 @@ Both CLI agents maintain conversation context across messages using `--resume`. 
 ### Machine Targeting
 When multiple OfficeClaw instances share one WhatsApp account, target specific machines:
 ```
-OCC:<home>: refactor main.go       # Only "home" responds
-OC:<home, office>: check status    # Both respond
+OCC: @home refactor main.go        # Only "home" responds
+OC: @home,office check status      # Both respond
 OC: hello                           # All respond
 ```
 
-Machine names are configured via `whatsapp.machine_name`. Matching is case-insensitive. Machines without a configured name ignore targeted messages and only respond to untargeted ones.
+Machine names are resolved automatically from the OS hostname (first segment of FQDN, lowercased). Matching is case-insensitive.
 
 ### Slash Commands
 All modes support slash commands sent as the message body:

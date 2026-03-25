@@ -3,16 +3,14 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
 )
 
-// IdentityTool allows the LLM to discover the machine's configured name.
+// IdentityTool allows the LLM to discover the machine's name.
 type IdentityTool struct {
 	machineName string
 }
 
 // NewIdentityTool creates an identity tool with the given machine name.
-// If machineName is empty, Execute falls back to os.Hostname().
 func NewIdentityTool(machineName string) *IdentityTool {
 	return &IdentityTool{machineName: machineName}
 }
@@ -31,13 +29,5 @@ func (t *IdentityTool) Parameters() map[string]interface{} {
 }
 
 func (t *IdentityTool) Execute(ctx context.Context, arguments string) (string, error) {
-	name := t.machineName
-	if name == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			return "", fmt.Errorf("failed to get hostname: %w", err)
-		}
-		name = hostname
-	}
-	return fmt.Sprintf("This machine is named: %s", name), nil
+	return fmt.Sprintf("This machine is named: %s", t.machineName), nil
 }

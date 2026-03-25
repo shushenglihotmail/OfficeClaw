@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
@@ -39,7 +40,7 @@ type Client struct {
 	triggerPrefix      string       // e.g., "OC:"
 	claudeTrigger      string       // e.g., "OCC:"
 	copilotTrigger     string       // hardcoded "OCCO:"
-	machineName        string       // e.g., "office1" (for targeted messaging)
+	machineName        string       // short hostname, resolved at startup (for targeted messaging)
 	handler            MessageHandler
 	claudeHandler      MessageHandler
 	copilotHandler     MessageHandler
@@ -77,8 +78,6 @@ type Config struct {
 	ClaudeTrigger string
 	// Default task when none specified
 	DefaultTask string
-	// Unique name for this machine (used for targeted messaging)
-	MachineName string
 	// Logger
 	Logger *log.Logger
 }
@@ -96,6 +95,16 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stdout, "[whatsapp] ", log.LstdFlags)
+	}
+
+	// Resolve machine name from hostname (first segment of FQDN)
+	machineName := ""
+	if hostname, err := os.Hostname(); err == nil {
+		if idx := strings.IndexByte(hostname, '.'); idx != -1 {
+			machineName = strings.ToLower(hostname[:idx])
+		} else {
+			machineName = strings.ToLower(hostname)
+		}
 	}
 
 	// Create database container for session storage
@@ -124,7 +133,7 @@ func New(cfg Config) (*Client, error) {
 		triggerPrefix:  cfg.TriggerPrefix,
 		claudeTrigger:  cfg.ClaudeTrigger,
 		copilotTrigger: "OCCO:",
-		machineName:    cfg.MachineName,
+		machineName:    machineName,
 		shutdownCh:     make(chan struct{}),
 	}, nil
 }
@@ -346,33 +355,25 @@ func (c *Client) handleMessage(msg *events.Message) {
 	content := text[len(prefix):]
 	content = strings.TrimSpace(content)
 
-	// Machine-targeted routing: check for <machine1,machine2>: prefix
+	// Machine-targeted routing: check for @machine1,machine2 prefix
 	// If the message has targeting syntax, only matching machines respond.
 	// Machines without a configured name never match targeted messages.
-	if strings.HasPrefix(content, "<") {
-		if closeIdx := strings.Index(content, ">"); closeIdx != -1 {
-			targetStr := content[1:closeIdx]
-			targets := strings.Split(targetStr, ",")
-			matched := false
-			if c.machineName != "" {
-				for _, t := range targets {
-					if strings.EqualFold(strings.TrimSpace(t), c.machineName) {
-						matched = true
-						break
-					}
+	targets, remaining := ParseMachineTarget(content)
+	if targets != nil {
+		matched := false
+		if c.machineName != "" {
+			for _, t := range targets {
+				if strings.EqualFold(t, c.machineName) {
+					matched = true
+					break
 				}
 			}
-			if !matched {
-				c.logger.Printf("Machine routing: message targets %q, this machine is %q — skipping", targetStr, c.machineName)
-				return
-			}
-			// Strip the <...>: prefix from content
-			rest := content[closeIdx+1:]
-			if strings.HasPrefix(rest, ":") {
-				rest = rest[1:]
-			}
-			content = strings.TrimSpace(rest)
 		}
+		if !matched {
+			c.logger.Printf("Machine routing: message targets %v, this machine is %q — skipping", targets, c.machineName)
+			return
+		}
+		content = remaining
 	}
 
 	// Parse task name (first word) or use default - only for OfficeClaw mode
@@ -508,6 +509,61 @@ func (c *Client) InFlightCount() int {
 // IsConnected returns whether the client is connected.
 func (c *Client) IsConnected() bool {
 	return c.client.IsConnected()
+}
+
+// MachineName returns the resolved machine name (short hostname).
+func (c *Client) MachineName() string {
+	return c.machineName
+}
+
+// ParseMachineTarget parses the @machine targeting syntax from message content.
+// If content starts with "@" followed by one or more machine names (comma-separated),
+// it returns the target list and the remaining message body.
+// Returns nil targets if there is no targeting (all machines should respond).
+func ParseMachineTarget(content string) (targets []string, remaining string) {
+	if !strings.HasPrefix(content, "@") {
+		return nil, content
+	}
+
+	// Find the end of the @token (first whitespace or end of string)
+	token := content[1:] // skip the @
+	endIdx := -1
+	for i, r := range token {
+		if unicode.IsSpace(r) {
+			endIdx = i
+			break
+		}
+	}
+
+	var targetStr string
+	if endIdx == -1 {
+		// @token is the entire content
+		targetStr = token
+		remaining = ""
+	} else {
+		targetStr = token[:endIdx]
+		remaining = strings.TrimSpace(token[endIdx:])
+	}
+
+	// Bare "@" with no name = untargeted
+	if targetStr == "" {
+		return nil, content
+	}
+
+	// Split by comma
+	parts := strings.Split(targetStr, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			targets = append(targets, p)
+		}
+	}
+
+	if len(targets) == 0 {
+		return nil, content
+	}
+
+	return targets, remaining
 }
 
 // printQRCode prints a QR code to the terminal.

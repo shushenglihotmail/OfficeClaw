@@ -84,14 +84,14 @@ See `agent/copilot_agent.go` for implementation.
 
 ### Machine-Targeted Messaging
 
-When multiple OfficeClaw instances share the same WhatsApp account, messages can be targeted to specific machines using angle-bracket syntax after the trigger prefix:
+When multiple OfficeClaw instances share the same WhatsApp account, messages can be targeted to specific machines using `@machine` syntax after the trigger prefix:
 
-- `OC:<home>: hello` — only the machine named "home" responds
-- `OC:<home, office>: hello` — both "home" and "office" respond
+- `OC: @home hello` — only the machine named "home" responds
+- `OC: @home,office hello` — both "home" and "office" respond
 - `OC: hello` — all machines respond (no filter, backward compatible)
 - `OC: who are you` — each machine uses the `get_identity` tool to report its name
 
-Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:, OCCO:). Machines without a configured `machine_name` ignore targeted messages and only respond to untargeted ones.
+Machine names are resolved automatically from the OS hostname (first segment of FQDN, lowercased). Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:, OCCO:).
 
 ### Package Responsibilities
 
@@ -108,7 +108,7 @@ Machine names are configured via `whatsapp.machine_name` in config.yaml. Matchin
   - `tasklog.go`: View task execution logs (running tasks, recent logs, read log contents)
   - `vpn.go`: VPN management tool (connect/disconnect/status/keep-alive via rasdial + Entra ID)
   - `memory.go`: Memory tools (memory_search, memory_write) - requires memory service
-  - `identity.go`: Machine identity tool (always registered, returns configured machine name)
+  - `identity.go`: Machine identity tool (always registered, returns OS hostname)
 - **memory/**: HTTP client for LLMCrawl's memory service
   - `client.go`: HTTP client for memory service REST API
   - `flush.go`: 80% context flush detection and distillation parsing
@@ -190,7 +190,7 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `whatsapp.claude_working_folder`: Working directory for Claude CLI agent
 - `whatsapp.copilot_working_folder`: Working directory for Copilot CLI agent
 - `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
-- `whatsapp.machine_name`: Unique name for this machine (used for targeted messaging)
+- Machine name for targeting is auto-detected from OS hostname (first segment of FQDN)
 - `llm.provider`: "anthropic", "azure", "openai", or "copilot" (optional — empty disables OC: mode)
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
 - `tools.vpn.vpn_names`: Windows VPN connection names (first is default)
