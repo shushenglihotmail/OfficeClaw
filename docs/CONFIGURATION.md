@@ -15,9 +15,9 @@ whatsapp:
   default_task: "assist"          # Task when none specified in OC: trigger
   machine_name: "office1"         # Unique name for targeted messaging
 
-# LLM provider
+# LLM provider (optional — leave empty to disable OC: mode)
 llm:
-  provider: "anthropic"           # "anthropic", "azure", or "openai"
+  provider: "anthropic"           # "anthropic", "azure", "openai", "copilot", or "" (disabled)
   temperature: 0.1
   request_timeout_seconds: 180
 
@@ -246,7 +246,7 @@ OC:<home, office>: check status    # Both respond
 OC: hello                           # All respond
 ```
 
-Machine names are configured via `whatsapp.machine_name`. Matching is case-insensitive.
+Machine names are configured via `whatsapp.machine_name`. Matching is case-insensitive. Machines without a configured name ignore targeted messages and only respond to untargeted ones.
 
 ### Slash Commands
 All modes support slash commands sent as the message body:

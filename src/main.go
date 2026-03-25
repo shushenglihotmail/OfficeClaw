@@ -102,12 +102,19 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 		pendingQueue.Drain(ctx, waClient, 24*time.Hour)
 	}
 
-	// Initialize LLM client (uses Claude CLI with SSO auth - no API key needed)
-	llmClient, err := llm.NewClient(cfg.LLM)
-	if err != nil {
-		log.Fatalf("Failed to init LLM client: %v", err)
+	// Initialize LLM client for OC: mode (optional — OCC:/OCCO: modes don't use it)
+	var llmClient *llm.Client
+	if cfg.LLM.Provider != "" {
+		llmClient, err = llm.NewClient(cfg.LLM)
+		if err != nil {
+			logger.Printf("Warning: LLM client not available (provider %q): %v", cfg.LLM.Provider, err)
+			logger.Printf("OC: mode will be unavailable. OCC:/OCCO: modes are unaffected.")
+		} else {
+			logger.Printf("LLM client initialized (provider: %s)", cfg.LLM.Provider)
+		}
+	} else {
+		logger.Printf("No LLM provider configured (llm.provider empty). OC: mode unavailable.")
 	}
-	logger.Printf("LLM client initialized (provider: %s)", cfg.LLM.Provider)
 
 	// Initialize task registry and executor
 	taskRegistry := tasks.NewRegistry()
@@ -166,61 +173,63 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 
 	logger.Printf("Tool registry initialized (%d tools registered)", toolRegistry.Count())
 
-	// Create the core agent
-	agentInstance := agent.New(agent.Config{
-		LLMClient:        llmClient,
-		ToolRegistry:     toolRegistry,
-		TaskExecutor:     taskExecutor,
-		MemoryClient:     memoryClient,
-		Logger:           logger,
-		DefaultTask:      cfg.WhatsApp.DefaultTask,
-		MaxContextTokens: cfg.Tools.Memory.MaxContextTokens,
-		FlushThreshold:   cfg.Tools.Memory.FlushThreshold,
-	})
-
-	// Bridge WhatsApp messages to OfficeClaw agent
-	waClient.SetMessageHandler(func(ctx context.Context, msg whatsapp.IncomingMessage) {
-		// Check for slash commands
-		if cmd := agent.ParseCommand(msg.Body); cmd != nil {
-			var reply string
-			switch cmd.Name {
-			case "reset", "clear":
-				agentInstance.ClearSession()
-				reply = "Session cleared. Conversation context has been reset."
-			case "summary":
-				result, err := agentInstance.ForceSummary(ctx)
-				if err != nil {
-					reply = fmt.Sprintf("Summary failed: %v", err)
-				} else {
-					reply = result
-				}
-			case "help":
-				reply = agent.CommandHelpText("OC")
-			default:
-				reply = fmt.Sprintf("Unknown command: /%s\n\n%s", cmd.Name, agent.CommandHelpText("OC"))
-			}
-			if err := waClient.SendMessage(ctx, msg.ChatJID, reply); err != nil {
-				logger.Printf("Failed to send command reply: %v", err)
-			}
-			return
-		}
-
-		// Set chat JID for async task notifications
-		if taskExecTool != nil {
-			taskExecTool.SetChatJID(msg.ChatJID)
-		}
-
-		agentInstance.HandleMessage(ctx, agent.IncomingMessage{
-			Source:    "whatsapp",
-			SenderID:  msg.SenderJID,
-			Sender:    msg.SenderJID,
-			Subject:   "",
-			Body:      msg.Body,
-			ChatID:    msg.ChatJID,
-			MessageID: msg.ID,
-			Task:      msg.TaskName,
+	// Create the core agent and OC: handler (only if LLM client is available)
+	if llmClient != nil {
+		agentInstance := agent.New(agent.Config{
+			LLMClient:        llmClient,
+			ToolRegistry:     toolRegistry,
+			TaskExecutor:     taskExecutor,
+			MemoryClient:     memoryClient,
+			Logger:           logger,
+			DefaultTask:      cfg.WhatsApp.DefaultTask,
+			MaxContextTokens: cfg.Tools.Memory.MaxContextTokens,
+			FlushThreshold:   cfg.Tools.Memory.FlushThreshold,
 		})
-	})
+
+		waClient.SetMessageHandler(func(ctx context.Context, msg whatsapp.IncomingMessage) {
+			// Check for slash commands
+			if cmd := agent.ParseCommand(msg.Body); cmd != nil {
+				var reply string
+				switch cmd.Name {
+				case "reset", "clear":
+					agentInstance.ClearSession()
+					reply = "Session cleared. Conversation context has been reset."
+				case "summary":
+					result, err := agentInstance.ForceSummary(ctx)
+					if err != nil {
+						reply = fmt.Sprintf("Summary failed: %v", err)
+					} else {
+						reply = result
+					}
+				case "help":
+					reply = agent.CommandHelpText("OC")
+				default:
+					reply = fmt.Sprintf("Unknown command: /%s\n\n%s", cmd.Name, agent.CommandHelpText("OC"))
+				}
+				if err := waClient.SendMessage(ctx, msg.ChatJID, reply); err != nil {
+					logger.Printf("Failed to send command reply: %v", err)
+				}
+				return
+			}
+
+			// Set chat JID for async task notifications
+			if taskExecTool != nil {
+				taskExecTool.SetChatJID(msg.ChatJID)
+			}
+
+			agentInstance.HandleMessage(ctx, agent.IncomingMessage{
+				Source:    "whatsapp",
+				SenderID:  msg.SenderJID,
+				Sender:    msg.SenderJID,
+				Subject:   "",
+				Body:      msg.Body,
+				ChatID:    msg.ChatJID,
+				MessageID: msg.ID,
+				Task:      msg.TaskName,
+			})
+		})
+		logger.Printf("OC: agent active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
+	}
 	logger.Printf("WhatsApp listener active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
 
 	// Initialize Claude CLI agent for direct Claude mode (persistent session)

@@ -134,7 +134,7 @@ OCCO: mode additionally supports `/effort` for reasoning effort levels.
 OC: mode additionally supports `/clear` and `/summary`.
 
 ### Machine Targeting
-Messages can target specific machines: `OCC:<home>: hello` — only the machine named "home" responds. Works with all trigger prefixes.
+Messages can target specific machines: `OCC:<home>: hello` — only the machine named "home" responds. Works with all trigger prefixes. Machines without a configured `machine_name` ignore targeted messages and only respond to untargeted ones.
 
 ### Graceful Shutdown
 On shutdown (signal or tray quit):

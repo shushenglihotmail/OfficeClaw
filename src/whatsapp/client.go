@@ -347,15 +347,19 @@ func (c *Client) handleMessage(msg *events.Message) {
 	content = strings.TrimSpace(content)
 
 	// Machine-targeted routing: check for <machine1,machine2>: prefix
-	if c.machineName != "" && strings.HasPrefix(content, "<") {
+	// If the message has targeting syntax, only matching machines respond.
+	// Machines without a configured name never match targeted messages.
+	if strings.HasPrefix(content, "<") {
 		if closeIdx := strings.Index(content, ">"); closeIdx != -1 {
 			targetStr := content[1:closeIdx]
 			targets := strings.Split(targetStr, ",")
 			matched := false
-			for _, t := range targets {
-				if strings.EqualFold(strings.TrimSpace(t), c.machineName) {
-					matched = true
-					break
+			if c.machineName != "" {
+				for _, t := range targets {
+					if strings.EqualFold(strings.TrimSpace(t), c.machineName) {
+						matched = true
+						break
+					}
 				}
 			}
 			if !matched {
@@ -408,6 +412,24 @@ func (c *Client) handleMessage(msg *events.Message) {
 		}()
 	} else {
 		c.logger.Printf("No handler registered for mode %s", mode)
+		// Reply to user so they know the agent mode is unavailable
+		var reply string
+		switch mode {
+		case ModeOfficeClaw:
+			reply = "OC: agent is not available. No LLM provider configured (check llm.provider in config)."
+		case ModeClaude:
+			reply = "Claude CLI agent is not available. Ensure the Claude CLI is installed and authenticated."
+		case ModeCopilot:
+			reply = "Copilot CLI agent is not available. Ensure the Copilot CLI is installed and authenticated."
+		default:
+			reply = fmt.Sprintf("No handler available for mode %s.", mode)
+		}
+		chatJID := msg.Info.Chat.String()
+		go func() {
+			if err := c.SendMessage(context.Background(), chatJID, reply); err != nil {
+				c.logger.Printf("Failed to send unavailable-agent reply: %v", err)
+			}
+		}()
 	}
 }
 

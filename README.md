@@ -7,7 +7,7 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 - **24/7 Background Agent**: Runs as a desktop app with system tray icon
 - **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web with auto-reconnection
 - **Multi-Provider LLM**: Claude (via CLI with SSO), GitHub Copilot (via CLI), Azure OpenAI, OpenAI
-- **Three Agent Modes**: OC: (custom agent), OCC: (Claude CLI), OCCO: (Copilot CLI)
+- **Three Agent Modes**: OC: (custom agent), OCC: (Claude CLI), OCCO: (Copilot CLI) — all optional, graceful degradation
 - **Extensible Tool System**: Reply to messages, read local files, execute tasks, view task logs, manage VPN
 - **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and WhatsApp notifications
 - **MCP Server**: Exposes OfficeClaw tools to Claude CLI and Copilot CLI for seamless integration

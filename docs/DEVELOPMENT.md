@@ -5,8 +5,8 @@
 - Go 1.22+
 - Windows (for system tray)
 - GCC compiler (for SQLite - required by go-sqlite3)
-- Claude Code CLI (for OCC: mode, authenticated via SSO)
-- GitHub Copilot CLI (for OCCO: mode, authenticated via `copilot login`)
+- Claude Code CLI (optional, for OCC: mode, authenticated via SSO)
+- GitHub Copilot CLI (optional, for OCCO: mode, authenticated via `copilot login`)
 
 ## Build
 
@@ -123,13 +123,13 @@ When `telemetry.prometheus.enabled` is true, Prometheus metrics are exposed at `
 - Check if WhatsApp Web is logged out on your phone
 
 ### Claude CLI not found
-- Ensure Claude Code CLI is installed
-- Run `claude` manually to authenticate via SSO
+- OCC: mode will be unavailable (OfficeClaw still starts, replies with an error for OCC: messages)
+- To enable: install Claude Code CLI and run `claude` to authenticate via SSO
 - Set `CLAUDE_CLI_PATH` environment variable if auto-detection fails
 
 ### Copilot CLI not found
-- Ensure GitHub Copilot CLI is installed
-- Run `copilot login` to authenticate via GitHub OAuth
+- OCCO: mode will be unavailable (OfficeClaw still starts, replies with an error for OCCO: messages)
+- To enable: install GitHub Copilot CLI and run `copilot login` to authenticate
 - Set `COPILOT_CLI_PATH` environment variable if auto-detection fails
 
 ### Build fails with CGO errors

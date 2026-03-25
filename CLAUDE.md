@@ -91,7 +91,7 @@ When multiple OfficeClaw instances share the same WhatsApp account, messages can
 - `OC: hello` — all machines respond (no filter, backward compatible)
 - `OC: who are you` — each machine uses the `get_identity` tool to report its name
 
-Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:, OCCO:).
+Machine names are configured via `whatsapp.machine_name` in config.yaml. Matching is case-insensitive. The same syntax works with all trigger prefixes (OC:, OCC:, OCCO:). Machines without a configured `machine_name` ignore targeted messages and only respond to untargeted ones.
 
 ### Package Responsibilities
 
@@ -191,7 +191,7 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `whatsapp.copilot_working_folder`: Working directory for Copilot CLI agent
 - `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
 - `whatsapp.machine_name`: Unique name for this machine (used for targeted messaging)
-- `llm.provider`: "anthropic", "azure", or "openai"
+- `llm.provider`: "anthropic", "azure", "openai", or "copilot" (optional — empty disables OC: mode)
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
 - `tools.vpn.vpn_names`: Windows VPN connection names (first is default)
 - `tools.memory.service_url`: Memory service URL (empty = disabled, see Memory Service section)
@@ -381,4 +381,11 @@ OfficeClaw has a unified slash command system that works across all agent modes.
 
 ### Graceful Degradation
 
-If `service_url` is empty or the memory service is unreachable on startup, memory features are disabled. OfficeClaw continues to function normally without memory capabilities.
+All agent modes are optional and degrade gracefully:
+
+- **OC: mode**: If `llm.provider` is empty or the configured LLM provider fails to initialize, OC: mode is unavailable. Messages with the OC: trigger receive a reply explaining the issue.
+- **OCC: mode**: If Claude CLI is not installed, OCC: messages receive a reply explaining Claude CLI is not available.
+- **OCCO: mode**: If Copilot CLI is not installed, OCCO: messages receive a reply explaining Copilot CLI is not available.
+- **Memory**: If `service_url` is empty or the memory service is unreachable on startup, memory features are disabled.
+
+OfficeClaw always starts successfully regardless of which CLIs or providers are available.
