@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OfficeClaw is a Windows-native AI agent system that monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes tasks autonomously. The agent runs as a 24/7 background service with a system tray interface.
+OfficeClaw is a Windows-native AI agent system that monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes tasks autonomously. The agent runs as a 24/7 desktop application with a system tray interface.
 
 ## Key Development Commands
 
@@ -20,12 +20,6 @@ make run                    # Equivalent to: go run ./src
 
 # Run MCP server (for Claude CLI integration)
 ./build/officeclaw.exe mcp serve
-
-# Windows service management (run as admin)
-./build/officeclaw.exe service install    # Register as Windows service with auto-recovery
-./build/officeclaw.exe service uninstall  # Remove Windows service
-make service-install                       # Same via Makefile
-make service-uninstall
 
 # Run tests
 make test                   # Run all tests in test/
@@ -101,7 +95,7 @@ Machine names are configured via `whatsapp.machine_name` in config.yaml. Matchin
 
 ### Package Responsibilities
 
-- **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand, service subcommand
+- **main.go**: Dependency injection, startup sequence, signal handling, MCP subcommand
 - **agent/**: Core orchestration loop, prompt building, conversation management
   - `claude_agent.go`: OCC: mode - Claude CLI integration with session persistence
   - `copilot_agent.go`: OCCO: mode - Copilot CLI integration with session persistence
@@ -118,7 +112,6 @@ Machine names are configured via `whatsapp.machine_name` in config.yaml. Matchin
 - **memory/**: HTTP client for LLMCrawl's memory service
   - `client.go`: HTTP client for memory service REST API
   - `flush.go`: 80% context flush detection and distillation parsing
-- **service/**: Windows Service integration (install/uninstall, SCM handler, auto-recovery)
 - **pending/**: Persistent message queue for unsent replies (JSON file-backed, retry on startup)
 - **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
   - `server.go`: JSON-RPC stdio server implementation
@@ -276,37 +269,9 @@ llm:
 - Signal handling uses `syscall.SIGINT` and `syscall.SIGTERM`
 - Paths in config use Windows backslashes: `C:\\Users\\...`
 
-### Windows Service Mode
-
-OfficeClaw can run as a Windows service for 24/7 operation with automatic recovery:
-
-```powershell
-# Install as service (run as admin)
-.\build\officeclaw.exe service install
-
-# Start/stop via standard Windows tools
-sc start OfficeClaw
-sc stop OfficeClaw
-
-# Or via Services MMC: services.msc → OfficeClaw AI Agent
-
-# Uninstall
-.\build\officeclaw.exe service uninstall
-```
-
-**Auto-recovery**: The service is configured with automatic restart on failure:
-- 1st failure: restart after 10 seconds
-- 2nd failure: restart after 30 seconds
-- 3rd failure: restart after 60 seconds
-- Reset period: 24 hours
-
-**Service vs Interactive mode**: OfficeClaw auto-detects its environment:
-- **Interactive**: Shows system tray, responds to Ctrl+C
-- **Service**: No tray, responds to Windows SCM stop/shutdown/pre-shutdown commands
-
 ### Graceful Shutdown
 
-On shutdown (signal, service stop, or tray quit), OfficeClaw:
+On shutdown (signal or tray quit), OfficeClaw:
 
 1. Stops accepting new WhatsApp messages
 2. Cancels running Claude CLI sessions (30s timeout)

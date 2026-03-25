@@ -4,7 +4,7 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 
 ## Features
 
-- **24/7 Background Agent**: Runs as a Windows service or desktop app with system tray icon
+- **24/7 Background Agent**: Runs as a desktop app with system tray icon
 - **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web with auto-reconnection
 - **Multi-Provider LLM**: Claude (via CLI with SSO), GitHub Copilot (via CLI), Azure OpenAI, OpenAI
 - **Three Agent Modes**: OC: (custom agent), OCC: (Claude CLI), OCCO: (Copilot CLI)
@@ -13,7 +13,7 @@ An AI Agent system for Windows that monitors WhatsApp messages, processes them t
 - **MCP Server**: Exposes OfficeClaw tools to Claude CLI and Copilot CLI for seamless integration
 - **Unified Command System**: `/model`, `/models`, `/reset`, `/effort` and more across all modes
 - **Machine Targeting**: Route messages to specific machines when multiple instances share one WhatsApp account
-- **Windows Service**: Auto-start, auto-recovery on failure, graceful shutdown with pending message queue
+- **Graceful Shutdown**: Pending message queue for reliability
 - **Observability**: OpenTelemetry + Prometheus metrics
 
 ## How It Works
@@ -75,12 +75,8 @@ make build-console
 cp config.example.yaml config.yaml
 # Edit config.yaml if needed
 
-# Run interactively (with system tray)
+# Run (with system tray)
 ./build/officeclaw.exe
-
-# Or install as Windows service (run as admin)
-./build/officeclaw.exe service install
-net start OfficeClaw
 ```
 
 On first run, scan the QR code with your WhatsApp mobile app to link the session.
@@ -99,7 +95,6 @@ OfficeClaw/
 │   ├── tasks/              # Task execution & scheduling
 │   ├── mcp/                # MCP server for CLI integration
 │   ├── memory/             # Memory service client
-│   ├── service/            # Windows service integration
 │   ├── pending/            # Pending message queue
 │   ├── tray/               # Windows system tray
 │   └── telemetry/          # OpenTelemetry + Prometheus

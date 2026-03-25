@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/officeclaw/src/mcp"
 	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/pending"
-	"github.com/officeclaw/src/service"
 	"github.com/officeclaw/src/tasks"
 	"github.com/officeclaw/src/telemetry"
 	"github.com/officeclaw/src/tools"
@@ -36,155 +34,37 @@ func main() {
 				runMCPServer()
 				return
 			}
-		case "service":
-			if len(os.Args) >= 3 {
-				handleServiceCommand(os.Args[2])
-				return
-			}
-			fmt.Println("Usage: officeclaw service [install|uninstall]")
-			fmt.Println("  install    Register as a Windows service (run as admin)")
-			fmt.Println("  uninstall  Remove the Windows service (run as admin)")
-			os.Exit(1)
 		}
 	}
 
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
-	// Detect if running as a Windows service
-	if service.IsWindowsService() {
-		runAsService(*configPath)
-	} else {
-		runInteractive(*configPath)
-	}
-}
-
-// handleServiceCommand processes service install/uninstall subcommands.
-func handleServiceCommand(cmd string) {
-	// Find config path from remaining args
-	configPath := "config.yaml"
-	for i, arg := range os.Args {
-		if arg == "-config" && i+1 < len(os.Args) {
-			configPath = os.Args[i+1]
-		}
-	}
-
-	switch cmd {
-	case "install":
-		if err := service.Install(configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	case "uninstall":
-		if err := service.Uninstall(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown service command: %s\n", cmd)
-		fmt.Println("Usage: officeclaw service [install|uninstall]")
-		os.Exit(1)
-	}
-}
-
-// runAsService runs OfficeClaw as a Windows service.
-func runAsService(configPath string) {
-	// When running as a service, the working directory is C:\Windows\System32.
-	// Resolve config path relative to the executable's location.
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-
-	// Set up early service log file next to exe for debugging startup issues
-	svcLogPath := filepath.Join(exeDir, "officeclaw-service.log")
-	svcLogFile, err := os.OpenFile(svcLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err == nil {
-		log.SetOutput(svcLogFile)
-		defer svcLogFile.Close()
-	}
-	log.Printf("[service] Starting. Exe: %s, ConfigPath arg: %s", exePath, configPath)
-
-	// Find config.yaml: next to exe, then in parent dir (repo root if exe is in build/)
-	if !filepath.IsAbs(configPath) {
-		candidates := []string{
-			filepath.Join(exeDir, configPath),
-			filepath.Join(exeDir, "..", configPath),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				configPath = c
-				log.Printf("[service] Found config at: %s", c)
-				break
-			}
-		}
-	}
-
-	// Set working dir to where config was found so other relative paths work
-	if abs, err := filepath.Abs(configPath); err == nil {
-		configDir := filepath.Dir(abs)
-		if err := os.Chdir(configDir); err == nil {
-			log.Printf("[service] Working directory set to: %s", configDir)
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
-	// Start application in background
-	go func() {
-		defer close(done)
-		runApp(ctx, cancel, configPath, false)
-	}()
-
-	// Run Windows service handler (blocks until service stops)
-	svcLogger := log.New(log.Writer(), "[OfficeClaw] ", log.LstdFlags|log.Lmsgprefix)
-	log.Printf("[service] Calling svc.Run")
-	if err := service.Run(cancel, done, svcLogger); err != nil {
-		log.Printf("[service] FATAL: service.Run error: %v", err)
-	}
-	log.Printf("[service] Exiting")
+	runInteractive(*configPath)
 }
 
 // runInteractive runs OfficeClaw in interactive mode with system tray.
 func runInteractive(configPath string) {
 	ctx, cancel := context.WithCancel(context.Background())
-	runApp(ctx, cancel, configPath, true)
+	runApp(ctx, cancel, configPath)
 }
 
-// fatalOrReturn logs a fatal error. In service mode it logs and returns the error
-// instead of calling os.Exit (which would kill the process before SCM gets a response).
-// In interactive mode it calls log.Fatalf as usual.
-func fatalOrReturn(logger *log.Logger, format string, v ...interface{}) error {
-	err := fmt.Errorf(format, v...)
-	if service.IsWindowsService() {
-		logger.Printf("FATAL: %v", err)
-		return err
-	}
-	logger.Fatalf(format, v...)
-	return nil // unreachable
-}
-
-// runApp is the core application logic shared between service and interactive modes.
-func runApp(ctx context.Context, cancel context.CancelFunc, configPath string, interactive bool) {
+// runApp is the core application logic.
+func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	// Load configuration
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fatalOrReturn(log.Default(), "Failed to load config: %v", err)
-		return
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Initialize logging
 	logger := setupLogging(cfg.Logging)
-	if service.IsWindowsService() {
-		logger.Printf("OfficeClaw starting as Windows service...")
-	} else {
-		logger.Printf("OfficeClaw starting...")
-	}
+	logger.Printf("OfficeClaw starting...")
 
 	// Initialize telemetry (OpenTelemetry + Prometheus)
 	tp, err := telemetry.Init(cfg.Telemetry)
 	if err != nil {
-		fatalOrReturn(logger, "Failed to init telemetry: %v", err)
-		return
+		log.Fatalf("Failed to init telemetry: %v", err)
 	}
 	defer tp.Shutdown(context.Background())
 	logger.Printf("Telemetry initialized (prometheus=%v, otel=%v)",
@@ -206,15 +86,13 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string, i
 		Logger:        logger,
 	})
 	if err != nil {
-		fatalOrReturn(logger, "Failed to init WhatsApp client: %v", err)
-		return
+		log.Fatalf("Failed to init WhatsApp client: %v", err)
 	}
 
 	// Connect to WhatsApp (may show QR code on first run)
 	logger.Printf("Connecting to WhatsApp...")
 	if err := waClient.Connect(ctx); err != nil {
-		fatalOrReturn(logger, "Failed to connect to WhatsApp: %v", err)
-		return
+		log.Fatalf("Failed to connect to WhatsApp: %v", err)
 	}
 	logger.Printf("WhatsApp connected")
 
@@ -227,8 +105,7 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string, i
 	// Initialize LLM client (uses Claude CLI with SSO auth - no API key needed)
 	llmClient, err := llm.NewClient(cfg.LLM)
 	if err != nil {
-		fatalOrReturn(logger, "Failed to init LLM client: %v", err)
-		return
+		log.Fatalf("Failed to init LLM client: %v", err)
 	}
 	logger.Printf("LLM client initialized (provider: %s)", cfg.LLM.Provider)
 
@@ -389,27 +266,19 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string, i
 	// Start WhatsApp reconnection watchdog
 	go waClient.StartReconnectWatchdog(ctx)
 
-	// Setup signal handler for interactive mode
-	if interactive {
-		go func() {
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-			<-sigCh
-			logger.Printf("Shutdown signal received")
-			cancel()
-		}()
-	}
+	// Setup signal handler
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		logger.Printf("Shutdown signal received")
+		cancel()
+	}()
 
-	// Wait for context cancellation (from signal, service stop, or tray quit)
-	if interactive {
-		// System tray blocks on main thread (Windows GUI requirement)
-		// When tray exits, we proceed to shutdown
-		logger.Printf("OfficeClaw is running. Minimized to system tray.")
-		tray.Run(cfg, cancel, logger)
-	} else {
-		// Service mode: block until context is cancelled
-		<-ctx.Done()
-	}
+	// System tray blocks on main thread (Windows GUI requirement)
+	// When tray exits, we proceed to shutdown
+	logger.Printf("OfficeClaw is running. Minimized to system tray.")
+	tray.Run(cfg, cancel, logger)
 
 	// === Graceful shutdown sequence ===
 	logger.Printf("Initiating graceful shutdown...")

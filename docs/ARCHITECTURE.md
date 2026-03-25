@@ -2,7 +2,7 @@
 
 ## Overview
 
-OfficeClaw is an AI Agent system running as a Windows service or desktop application. It monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes actions autonomously.
+OfficeClaw is an AI Agent system running as a Windows desktop application. It monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes actions autonomously.
 
 ## System Architecture
 
@@ -68,8 +68,8 @@ OfficeClaw is an AI Agent system running as a Windows service or desktop applica
 │           │     └─────────────────┘                            │
 │           │                                                    │
 │  ┌──────────────────┐  ┌────────────────────────┐             │
-│  │  OpenTelemetry   │  │  System Tray / Service │             │
-│  │  + Prometheus    │  │  (Windows GUI / SCM)   │             │
+│  │  OpenTelemetry   │  │    System Tray           │             │
+│  │  + Prometheus    │  │  (Windows GUI)         │             │
 │  └──────────────────┘  └────────────────────────┘             │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -78,7 +78,7 @@ OfficeClaw is an AI Agent system running as a Windows service or desktop applica
 
 | Package     | Responsibility                                          |
 |-------------|--------------------------------------------------------|
-| `main`      | Entry point, dependency wiring, signal handling, service/MCP subcommands |
+| `main`      | Entry point, dependency wiring, signal handling, MCP subcommand |
 | `config`    | YAML config loading, validation, env var overrides      |
 | `whatsapp`  | WhatsApp Web integration via whatsmeow, auto-reconnection |
 | `llm`       | Multi-provider LLM client (Claude CLI, Copilot CLI, Azure, OpenAI) |
@@ -87,7 +87,6 @@ OfficeClaw is an AI Agent system running as a Windows service or desktop applica
 | `tasks`     | Task definitions, executor with timeout, cron scheduler |
 | `mcp`       | MCP server for exposing tools to CLI agents             |
 | `memory`    | HTTP client for LLMCrawl's memory service               |
-| `service`   | Windows Service integration (install/uninstall, SCM handler) |
 | `pending`   | Persistent message queue for unsent replies              |
 | `tray`      | Windows system tray icon and menu (interactive mode)     |
 | `telemetry` | OpenTelemetry tracing + Prometheus metrics              |
@@ -138,7 +137,7 @@ OC: mode additionally supports `/clear` and `/summary`.
 Messages can target specific machines: `OCC:<home>: hello` — only the machine named "home" responds. Works with all trigger prefixes.
 
 ### Graceful Shutdown
-On shutdown (signal, service stop, or tray quit):
+On shutdown (signal or tray quit):
 1. Stops accepting new WhatsApp messages
 2. Cancels running CLI sessions (30s timeout)
 3. Waits for in-flight message handlers to complete

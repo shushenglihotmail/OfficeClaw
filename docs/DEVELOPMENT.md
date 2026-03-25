@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Go 1.22+
-- Windows (for system tray and service)
+- Windows (for system tray)
 - GCC compiler (for SQLite - required by go-sqlite3)
 - Claude Code CLI (for OCC: mode, authenticated via SSO)
 - GitHub Copilot CLI (for OCCO: mode, authenticated via `copilot login`)
@@ -19,17 +19,7 @@ make build
 
 # Run directly in development
 make run
-
-# Install as Windows service (run as admin)
-./build/officeclaw.exe service install
-net start OfficeClaw
-
-# Uninstall service
-net stop OfficeClaw
-./build/officeclaw.exe service uninstall
 ```
-
-The same binary works for all modes (interactive, service). It auto-detects whether it's running as a Windows service.
 
 ## Test
 
@@ -41,7 +31,7 @@ make test
 
 ```
 src/
-├── main.go              # Entry point, dependency wiring, service/MCP subcommands
+├── main.go              # Entry point, dependency wiring, MCP subcommand
 ├── agent/               # Core agent orchestration
 │   ├── agent.go         # OC: mode agent (LLM ↔ tool loop)
 │   ├── claude_agent.go  # OCC: mode (Claude CLI agent)
@@ -66,7 +56,6 @@ src/
 │   └── identity.go      # Machine identity tool
 ├── mcp/                 # MCP server for CLI integration
 ├── memory/              # Memory service client
-├── service/             # Windows Service (install/uninstall, SCM handler)
 ├── pending/             # Pending message queue (JSON file-backed)
 ├── tasks/               # Task management
 │   └── executor.go      # Registry, executor, scheduler
