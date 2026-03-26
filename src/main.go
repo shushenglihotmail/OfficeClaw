@@ -20,10 +20,10 @@ import (
 	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/pending"
 	"github.com/officeclaw/src/tasks"
+	"github.com/officeclaw/src/telegram"
 	"github.com/officeclaw/src/telemetry"
 	"github.com/officeclaw/src/tools"
 	"github.com/officeclaw/src/tray"
-	"github.com/officeclaw/src/whatsapp"
 )
 
 func main() {
@@ -77,29 +77,30 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 		logger.Printf("Found %d pending messages from previous session", n)
 	}
 
-	// Initialize WhatsApp client
-	waClient, err := whatsapp.New(whatsapp.Config{
-		DatabasePath:  cfg.WhatsApp.DatabasePath,
-		TriggerPrefix: cfg.WhatsApp.TriggerPrefix,
-		ClaudeTrigger: cfg.WhatsApp.ClaudeTrigger,
-		DefaultTask:   cfg.WhatsApp.DefaultTask,
-		Logger:        logger,
+	// Initialize Telegram bot client
+	tgClient, err := telegram.New(telegram.Config{
+		BotToken:       cfg.Telegram.BotToken,
+		TriggerPrefix:  cfg.Telegram.TriggerPrefix,
+		ClaudeTrigger:  cfg.Telegram.ClaudeTrigger,
+		DefaultTask:    cfg.Telegram.DefaultTask,
+		Logger:         logger,
+		AllowedChatIDs: cfg.Telegram.AllowedChatIDs,
 	})
 	if err != nil {
-		log.Fatalf("Failed to init WhatsApp client: %v", err)
+		log.Fatalf("Failed to init Telegram bot: %v", err)
 	}
 
-	// Connect to WhatsApp (may show QR code on first run)
-	logger.Printf("Connecting to WhatsApp...")
-	if err := waClient.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect to WhatsApp: %v", err)
+	// Connect to Telegram (starts long-polling)
+	logger.Printf("Connecting to Telegram...")
+	if err := tgClient.Connect(ctx); err != nil {
+		log.Fatalf("Failed to connect to Telegram: %v", err)
 	}
-	logger.Printf("WhatsApp connected")
+	logger.Printf("Telegram bot connected")
 
 	// Drain pending messages after connecting
 	if pendingQueue.Len() > 0 {
 		logger.Printf("Draining pending messages...")
-		pendingQueue.Drain(ctx, waClient, 24*time.Hour)
+		pendingQueue.Drain(ctx, tgClient, 24*time.Hour)
 	}
 
 	// Initialize LLM client for OC: mode (optional — OCC:/OCCO: modes don't use it)
@@ -127,16 +128,16 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	// Initialize tool registry
 	toolRegistry := tools.NewRegistry()
 
-	// Create task execution tool (needs WhatsApp client for async notifications)
+	// Create task execution tool (needs Telegram client for async notifications)
 	var taskExecTool *tools.TaskExecutionTool
 	if cfg.Tools.TaskExecution.Enabled {
-		taskExecTool = tools.NewTaskExecutionTool(taskExecutor, waClient)
+		taskExecTool = tools.NewTaskExecutionTool(taskExecutor, tgClient)
 		toolRegistry.Register(taskExecTool)
 	}
 
 	// Register other built-in tools
 	if cfg.Tools.Messaging.Enabled {
-		toolRegistry.Register(tools.NewMessagingTool(waClient))
+		toolRegistry.Register(tools.NewMessagingTool(tgClient))
 	}
 	if cfg.Tools.FileAccess.Enabled {
 		toolRegistry.Register(tools.NewFileAccessTool(cfg.Tools.FileAccess))
@@ -151,7 +152,7 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	}
 
 	// Identity tool (always registered — lightweight read-only tool)
-	toolRegistry.Register(tools.NewIdentityTool(waClient.MachineName()))
+	toolRegistry.Register(tools.NewIdentityTool(tgClient.MachineName()))
 
 	// Initialize memory client (optional - graceful degradation if service not available)
 	var memoryClient *memory.Client
@@ -181,12 +182,12 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 			TaskExecutor:     taskExecutor,
 			MemoryClient:     memoryClient,
 			Logger:           logger,
-			DefaultTask:      cfg.WhatsApp.DefaultTask,
+			DefaultTask:      cfg.Telegram.DefaultTask,
 			MaxContextTokens: cfg.Tools.Memory.MaxContextTokens,
 			FlushThreshold:   cfg.Tools.Memory.FlushThreshold,
 		})
 
-		waClient.SetMessageHandler(func(ctx context.Context, msg whatsapp.IncomingMessage) {
+		tgClient.SetMessageHandler(func(ctx context.Context, msg telegram.IncomingMessage) {
 			// Check for slash commands
 			if cmd := agent.ParseCommand(msg.Body); cmd != nil {
 				var reply string
@@ -206,74 +207,74 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 				default:
 					reply = fmt.Sprintf("Unknown command: /%s\n\n%s", cmd.Name, agent.CommandHelpText("OC"))
 				}
-				if err := waClient.SendMessage(ctx, msg.ChatJID, reply); err != nil {
+				if err := tgClient.SendMessage(ctx, msg.ChatID, reply); err != nil {
 					logger.Printf("Failed to send command reply: %v", err)
 				}
 				return
 			}
 
-			// Set chat JID for async task notifications
+			// Set chat ID for async task notifications
 			if taskExecTool != nil {
-				taskExecTool.SetChatJID(msg.ChatJID)
+				taskExecTool.SetChatID(msg.ChatID)
 			}
 
 			agentInstance.HandleMessage(ctx, agent.IncomingMessage{
-				Source:    "whatsapp",
-				SenderID:  msg.SenderJID,
-				Sender:    msg.SenderJID,
+				Source:    "telegram",
+				SenderID:  msg.SenderID,
+				Sender:    msg.SenderID,
 				Subject:   "",
 				Body:      msg.Body,
-				ChatID:    msg.ChatJID,
+				ChatID:    msg.ChatID,
 				MessageID: msg.ID,
 				Task:      msg.TaskName,
 			})
 		})
-		logger.Printf("OC: agent active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
+		logger.Printf("OC: agent active (trigger: %s)", cfg.Telegram.TriggerPrefix)
 	}
-	logger.Printf("WhatsApp listener active (trigger: %s)", cfg.WhatsApp.TriggerPrefix)
+	logger.Printf("Telegram listener active (trigger: %s)", cfg.Telegram.TriggerPrefix)
 
 	// Initialize Claude CLI agent for direct Claude mode (persistent session)
 	claudeAgent, err := agent.NewClaudeAgent(agent.ClaudeAgentConfig{
 		CLIPath:       cfg.LLM.Anthropic.CLIPath,
-		WorkingFolder: cfg.WhatsApp.ClaudeWorkingFolder,
-		WAClient:      waClient,
+		WorkingFolder: cfg.Telegram.ClaudeWorkingFolder,
+		TGClient:      tgClient,
 		MemoryClient:  memoryClient,
 		PendingQueue:  pendingQueue,
 		Logger:        logger,
-		ResetKeyword:  cfg.WhatsApp.ClaudeSessionResetKeyword,
+		ResetKeyword:  cfg.Telegram.ClaudeSessionResetKeyword,
 	})
 	if err != nil {
 		logger.Printf("Warning: Claude CLI agent not available: %v", err)
 	} else {
-		waClient.SetClaudeHandler(claudeAgent.HandleMessage)
+		tgClient.SetClaudeHandler(claudeAgent.HandleMessage)
 		logger.Printf("Claude CLI agent active (trigger: %s, folder: %s, reset: %q)",
-			cfg.WhatsApp.ClaudeTrigger, cfg.WhatsApp.ClaudeWorkingFolder, cfg.WhatsApp.ClaudeSessionResetKeyword)
+			cfg.Telegram.ClaudeTrigger, cfg.Telegram.ClaudeWorkingFolder, cfg.Telegram.ClaudeSessionResetKeyword)
 	}
 
 	// Initialize Copilot CLI agent for direct Copilot mode (persistent session)
 	copilotAgent, err := agent.NewCopilotAgent(agent.CopilotAgentConfig{
 		CLIPath:       cfg.LLM.Copilot.CLIPath,
 		Model:         cfg.LLM.Copilot.Model,
-		WorkingFolder: cfg.WhatsApp.CopilotWorkingFolder,
-		WAClient:      waClient,
+		WorkingFolder: cfg.Telegram.CopilotWorkingFolder,
+		TGClient:      tgClient,
 		MemoryClient:  memoryClient,
 		PendingQueue:  pendingQueue,
 		Logger:        logger,
-		ResetKeyword:  cfg.WhatsApp.ClaudeSessionResetKeyword, // Reuse same reset keyword
+		ResetKeyword:  cfg.Telegram.ClaudeSessionResetKeyword, // Reuse same reset keyword
 	})
 	if err != nil {
 		logger.Printf("Warning: Copilot CLI agent not available: %v", err)
 	} else {
-		waClient.SetCopilotHandler(copilotAgent.HandleMessage)
+		tgClient.SetCopilotHandler(copilotAgent.HandleMessage)
 		logger.Printf("Copilot CLI agent active (trigger: OCCO:, folder: %s)",
-			cfg.WhatsApp.CopilotWorkingFolder)
+			cfg.Telegram.CopilotWorkingFolder)
 	}
 
 	// Start task scheduler
 	go taskExecutor.StartScheduler(ctx)
 
-	// Start WhatsApp reconnection watchdog
-	go waClient.StartReconnectWatchdog(ctx)
+	// Start Telegram reconnection watchdog
+	go tgClient.StartReconnectWatchdog(ctx)
 
 	// Setup signal handler
 	go func() {
@@ -300,8 +301,8 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 		copilotAgent.Stop()
 	}
 
-	// 2. Wait for in-flight WhatsApp handlers, then disconnect
-	waClient.GracefulDisconnect(30 * time.Second)
+	// 2. Wait for in-flight Telegram handlers, then disconnect
+	tgClient.GracefulDisconnect(30 * time.Second)
 
 	// 3. Save any pending messages that couldn't be sent
 	// (handlers that completed but failed to send due to disconnect)
@@ -357,14 +358,14 @@ func runMCPServer() {
 	}
 	taskExecutor := tasks.NewExecutor(taskRegistry, logger)
 
-	// Initialize tool registry with tools that don't require WhatsApp
+	// Initialize tool registry with tools that don't require Telegram
 	toolRegistry := tools.NewRegistry()
 
 	if cfg.Tools.FileAccess.Enabled {
 		toolRegistry.Register(tools.NewFileAccessTool(cfg.Tools.FileAccess))
 	}
 	if cfg.Tools.TaskExecution.Enabled {
-		// In MCP mode, no WhatsApp client available, so pass nil
+		// In MCP mode, no Telegram client available, so pass nil
 		// Async notifications won't work, but sync execution will
 		toolRegistry.Register(tools.NewTaskExecutionTool(taskExecutor, nil))
 	}
@@ -393,7 +394,7 @@ func runMCPServer() {
 		}
 	}
 
-	// Note: send_message tool requires WhatsApp client which isn't available in standalone mode
+	// Note: send_message tool requires Telegram client which isn't available in standalone mode
 	// For full tool access, run OfficeClaw normally and use OCC: mode
 
 	logger.Printf("MCP server starting with %d tools", toolRegistry.Count())

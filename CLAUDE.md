@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OfficeClaw is a Windows-native AI agent system that monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes tasks autonomously. The agent runs as a 24/7 desktop application with a system tray interface.
+OfficeClaw is a Windows-native AI agent system that monitors Telegram for trigger messages, processes them through LLMs with tool-calling capabilities, and executes tasks autonomously. The agent runs as a 24/7 desktop application with a system tray interface.
 
 ## Key Development Commands
 
@@ -44,10 +44,10 @@ make memory-search          # Interactive semantic search
 OfficeClaw supports three operating modes triggered by different prefixes (all case-insensitive):
 
 ### OC: Mode (OfficeClaw Agent)
-**Core Loop**: WhatsApp Listener → OfficeClaw Agent → LLM ↔ Tools (repeat until final response)
+**Core Loop**: Telegram Listener → OfficeClaw Agent → LLM ↔ Tools (repeat until final response)
 
-1. WhatsApp listener detects message starting with "OC:"
-2. Message parsed for task name (defaults to `whatsapp.default_task`)
+1. Telegram listener detects message starting with "OC:"
+2. Message parsed for task name (defaults to `telegram.default_task`)
 3. Agent builds prompt with message context
 4. Agent enters LLM ↔ tool-call loop (max 20 rounds):
    - LLM returns text and/or tool calls
@@ -56,35 +56,35 @@ OfficeClaw supports three operating modes triggered by different prefixes (all c
    - Repeat until LLM returns text with no tool calls
 
 ### OCC: Mode (Claude CLI Agent)
-**Direct invocation**: WhatsApp Listener → Claude CLI (with auto-approval + MCP tools)
+**Direct invocation**: Telegram Listener → Claude CLI (with auto-approval + MCP tools)
 
-1. WhatsApp listener detects message starting with "OCC:"
+1. Telegram listener detects message starting with "OCC:"
 2. Claude CLI spawned with `--dangerously-skip-permissions` (auto-approval)
 3. OfficeClaw automatically configures itself as an MCP server for the Claude CLI session
-4. Claude runs in `whatsapp.claude_working_folder` with full tool access (native + OfficeClaw tools via MCP)
+4. Claude runs in `telegram.claude_working_folder` with full tool access (native + OfficeClaw tools via MCP)
 5. Claude executes autonomously using both its built-in tools and OfficeClaw's tools
-6. Final response sent back via WhatsApp
+6. Final response sent back via Telegram
 
 This mode gives Claude CLI full autonomy while still providing access to OfficeClaw tools (task execution, file access, task logs, VPN control) via MCP.
 See `agent/claude_agent.go` for implementation.
 
 ### OCCO: Mode (Copilot CLI Agent)
-**Direct invocation**: WhatsApp Listener → Copilot CLI (with --allow-all + MCP tools)
+**Direct invocation**: Telegram Listener → Copilot CLI (with --allow-all + MCP tools)
 
-1. WhatsApp listener detects message starting with "OCCO:"
+1. Telegram listener detects message starting with "OCCO:"
 2. Copilot CLI spawned with `--allow-all` (auto-approval for tools, paths, URLs)
 3. OfficeClaw configures itself as MCP server via `--additional-mcp-config`
-4. Copilot runs in `whatsapp.copilot_working_folder` with full tool access
+4. Copilot runs in `telegram.copilot_working_folder` with full tool access
 5. Uses `--output-format json` (JSONL) for structured response parsing
 6. Session persistence via `--resume=<sessionId>` (same pattern as Claude agent)
-7. Final response sent back via WhatsApp
+7. Final response sent back via Telegram
 
 This mode mirrors the Claude CLI agent but uses GitHub Copilot's LLM models.
 See `agent/copilot_agent.go` for implementation.
 
 ### Machine-Targeted Messaging
 
-When multiple OfficeClaw instances share the same WhatsApp account, messages can be targeted to specific machines using `@machine` syntax after the trigger prefix:
+When multiple OfficeClaw instances share the same Telegram bot, messages can be targeted to specific machines using `@machine` syntax after the trigger prefix:
 
 - `OC: @home hello` — only the machine named "home" responds
 - `OC: @home,office hello` — both "home" and "office" respond
@@ -102,7 +102,7 @@ Machine names are resolved automatically from the OS hostname (first segment of 
   - `commands.go`: Unified slash command system (parsing, model lists, help text)
 - **llm/**: Multi-provider abstraction (Anthropic/Azure/OpenAI/Copilot), unified message format
 - **tools/**: Registry pattern for LLM tool-calling, execution dispatcher
-  - `messaging.go`: WhatsApp reply tool
+  - `messaging.go`: Telegram reply tool
   - `fileaccess.go`: Local file read tool (path-whitelisted)
   - `taskexec.go`: Predefined task execution with async support (only tasks in config are allowed)
   - `tasklog.go`: View task execution logs (running tasks, recent logs, read log contents)
@@ -116,7 +116,7 @@ Machine names are resolved automatically from the OS hostname (first segment of 
 - **mcp/**: Model Context Protocol server for exposing tools to Claude CLI
   - `server.go`: JSON-RPC stdio server implementation
   - `protocol.go`: MCP and JSON-RPC type definitions
-- **whatsapp/**: WhatsApp Web integration via whatsmeow library
+- **telegram/**: Telegram Bot API integration via go-telegram-bot-api library
 - **tasks/**: Task registry, executor with timeout, cron scheduler
 - **config/**: YAML config loading with environment variable overrides
 - **telemetry/**: OpenTelemetry traces + Prometheus metrics
@@ -180,16 +180,18 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 
 - Main config: `config.yaml` (copy from `config.example.yaml`)
 - Environment variables override config values
-- WhatsApp session stored in SQLite database (default: `whatsapp.db`)
+- Telegram bot auth is stateless (just a token) — no database needed
 - Logs written to `logging.file` (default: `officeclaw.log`)
 
 **Critical config paths**:
-- `whatsapp.trigger_prefix`: Message prefix for OfficeClaw agent mode (default: "OC:")
-- `whatsapp.claude_trigger`: Message prefix for Claude CLI agent mode (default: "OCC:")
+- `telegram.bot_token`: Telegram bot token from @BotFather (or `TELEGRAM_BOT_TOKEN` env var)
+- `telegram.trigger_prefix`: Message prefix for OfficeClaw agent mode (default: "OC:")
+- `telegram.claude_trigger`: Message prefix for Claude CLI agent mode (default: "OCC:")
 - Copilot CLI agent trigger is hardcoded as "OCCO:" (not configurable)
-- `whatsapp.claude_working_folder`: Working directory for Claude CLI agent
-- `whatsapp.copilot_working_folder`: Working directory for Copilot CLI agent
-- `whatsapp.default_task`: Fallback task when none specified in OC: trigger message
+- `telegram.claude_working_folder`: Working directory for Claude CLI agent
+- `telegram.copilot_working_folder`: Working directory for Copilot CLI agent
+- `telegram.default_task`: Fallback task when none specified in OC: trigger message
+- `telegram.allowed_chat_ids`: Access control — if empty, all chats accepted (IDs logged for easy setup)
 - Machine name for targeting is auto-detected from OS hostname (first segment of FQDN)
 - `llm.provider`: "anthropic", "azure", "openai", or "copilot" (optional — empty disables OC: mode)
 - `tools.file_access.allowed_paths`: Whitelist for file read tool (security boundary)
@@ -197,14 +199,14 @@ Tasks without `command` are LLM-only interactions. Tasks with `command` execute 
 - `tools.memory.service_url`: Memory service URL (empty = disabled, see Memory Service section)
 - `tasks.<name>.command`: Predefined command for task execution (only listed tasks are allowed)
 
-### WhatsApp Setup
+### Telegram Bot Setup
 
-On first run, OfficeClaw displays a QR code. Scan it with your WhatsApp mobile app to link:
-
-1. Open WhatsApp on your phone
-2. Go to Settings → Linked Devices → Link a Device
-3. Scan the QR code displayed in the terminal
-4. Session is saved to `whatsapp.db` - subsequent runs reconnect automatically
+1. Open Telegram and message @BotFather
+2. Send `/newbot` and follow the prompts to create a bot
+3. Copy the bot token into `config.yaml` under `telegram.bot_token` (or set `TELEGRAM_BOT_TOKEN` env var)
+4. For group usage: send `/setprivacy` to @BotFather, select your bot, choose "Disabled" so the bot can see all messages (not just /commands)
+5. Start OfficeClaw — it connects immediately (no QR code or device linking needed)
+6. Send a message to your bot to test. Check the logs for your chat ID, then add it to `telegram.allowed_chat_ids` for access control.
 
 ### LLM Authentication Options
 
@@ -257,7 +259,8 @@ llm:
 
 ## Security Notes
 
-- **WhatsApp session**: Stored in SQLite database. Keep `whatsapp.db` secure.
+- **Telegram bot token**: Keep `telegram.bot_token` secure. Anyone with the token can control the bot.
+- **Allowed chat IDs**: Use `telegram.allowed_chat_ids` to restrict which chats can interact with the bot. If empty, all chats are accepted.
 - **File access tool**: Restricted to `allowed_paths` whitelist. Validates all paths against whitelist before reading.
 - **Task execution**: Only predefined tasks from `config.yaml` can be executed. The LLM cannot run arbitrary commands.
 - **VPN tool**: Only VPN names listed in `tools.vpn.vpn_names` are allowed. Uses cached Entra ID tokens for silent auth.
@@ -273,14 +276,14 @@ llm:
 
 On shutdown (signal or tray quit), OfficeClaw:
 
-1. Stops accepting new WhatsApp messages
+1. Stops accepting new Telegram messages
 2. Cancels running Claude CLI sessions (30s timeout)
 3. Waits for in-flight message handlers to complete (30s timeout)
-4. Disconnects WhatsApp
+4. Stops Telegram polling
 
 ### Pending Message Queue
 
-If a reply cannot be sent (e.g., WhatsApp disconnected during shutdown), it is saved to `pending_messages.json`. On the next startup, pending messages are automatically retried after WhatsApp reconnects. Messages older than 24 hours are discarded.
+If a reply cannot be sent (e.g., Telegram API error during shutdown), it is saved to `pending_messages.json`. On the next startup, pending messages are automatically retried after Telegram connects. Messages older than 24 hours are discarded.
 
 ## Telemetry
 
@@ -370,7 +373,7 @@ OfficeClaw has a unified slash command system that works across all agent modes.
 - `/models` — List available models for the current agent, with current model marked
 - `/help` — Show available commands
 
-**Global commands (handled at WhatsApp layer, before agent dispatch)**:
+**Global commands (handled at Telegram layer, before agent dispatch)**:
 - `/mute` — Mute this instance; only `/unmute` and `/ping` will be processed while muted
 - `/unmute` — Unmute this instance
 - `/ping` — Show machine name, mute state, and available modes (OC ✓/✗ | OCC ✓/✗ | OCCO ✓/✗)

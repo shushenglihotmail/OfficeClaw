@@ -18,7 +18,7 @@ import (
 	"github.com/officeclaw/src/llm"
 	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/pending"
-	"github.com/officeclaw/src/whatsapp"
+	"github.com/officeclaw/src/telegram"
 )
 
 // CopilotAgent handles messages by invoking Copilot CLI directly as an agent.
@@ -29,7 +29,7 @@ type CopilotAgent struct {
 	model          string
 	workingFolder  string
 	officeClawPath string // Path to OfficeClaw executable for MCP server
-	waClient       *whatsapp.Client
+	tgClient       *telegram.Client
 	memoryClient   *memory.Client   // Optional
 	pendingQueue   *pending.Queue   // Optional
 	logger         *log.Logger
@@ -53,7 +53,7 @@ type CopilotAgentConfig struct {
 	CLIPath       string           // Path to Copilot CLI (auto-detected if empty)
 	Model         string           // Model to use (empty = default)
 	WorkingFolder string           // Working directory for Copilot CLI
-	WAClient      *whatsapp.Client // WhatsApp client for sending replies
+	TGClient      *telegram.Client // Telegram client for sending replies
 	MemoryClient  *memory.Client   // Optional: memory service client
 	PendingQueue  *pending.Queue   // Optional: queue for unsent messages
 	Logger        *log.Logger
@@ -104,7 +104,7 @@ func NewCopilotAgent(cfg CopilotAgentConfig) (*CopilotAgent, error) {
 		model:          cfg.Model,
 		workingFolder:  workingFolder,
 		officeClawPath: officeClawPath,
-		waClient:       cfg.WAClient,
+		tgClient:       cfg.TGClient,
 		memoryClient:   cfg.MemoryClient,
 		pendingQueue:   cfg.PendingQueue,
 		logger:         cfg.Logger,
@@ -137,34 +137,34 @@ func (a *CopilotAgent) clearSession(chatJID string) {
 }
 
 // HandleMessage processes a message using Copilot CLI as an autonomous agent.
-func (a *CopilotAgent) HandleMessage(ctx context.Context, msg whatsapp.IncomingMessage) {
+func (a *CopilotAgent) HandleMessage(ctx context.Context, msg telegram.IncomingMessage) {
 	a.logger.Printf("[copilot-agent] Processing message from %s (chat: %s): %s",
-		msg.SenderJID, msg.ChatJID, truncateForLog(msg.Body, 100))
+		msg.SenderID, msg.ChatID, truncateForLog(msg.Body, 100))
 
 	// Check for slash commands and legacy reset keyword
 	if cmd := ParseCommand(msg.Body); cmd != nil {
-		a.handleCommand(ctx, msg.ChatJID, cmd)
+		a.handleCommand(ctx, msg.ChatID, cmd)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(msg.Body), a.resetKeyword) {
-		a.handleCommand(ctx, msg.ChatJID, &Command{Name: "reset"})
+		a.handleCommand(ctx, msg.ChatID, &Command{Name: "reset"})
 		return
 	}
 
 	// Build prompt
-	prompt := fmt.Sprintf(`You received a WhatsApp message. Process it and provide a helpful response.
+	prompt := fmt.Sprintf(`You received a Telegram message. Process it and provide a helpful response.
 
 From: %s
 Message: %s
 
 Respond directly to the user's message.`,
-		msg.SenderJID, msg.Body)
+		msg.SenderID, msg.Body)
 
 	// Log to memory service
-	sessionID := a.getSessionID(msg.ChatJID)
+	sessionID := a.getSessionID(msg.ChatID)
 	memorySessionID := sessionID
 	if memorySessionID == "" {
-		memorySessionID = "copilot-" + msg.ChatJID
+		memorySessionID = "copilot-" + msg.ChatID
 	}
 	if a.memoryClient != nil {
 		go func() {
@@ -179,7 +179,7 @@ Respond directly to the user's message.`,
 	defer a.wg.Done()
 	execCtx, execCancel := context.WithCancel(a.ctx)
 	defer execCancel()
-	response, err := a.executeCopilotCLI(execCtx, msg.ChatJID, prompt)
+	response, err := a.executeCopilotCLI(execCtx, msg.ChatID, prompt)
 	if err != nil {
 		a.logger.Printf("[copilot-agent] CLI error: %v", err)
 		response = fmt.Sprintf("Sorry, I encountered an error: %v", err)
@@ -187,7 +187,7 @@ Respond directly to the user's message.`,
 
 	// Log response to memory
 	if a.memoryClient != nil && response != "" {
-		finalSessionID := a.getSessionID(msg.ChatJID)
+		finalSessionID := a.getSessionID(msg.ChatID)
 		if finalSessionID == "" {
 			finalSessionID = memorySessionID
 		}
@@ -198,7 +198,7 @@ Respond directly to the user's message.`,
 		}()
 	}
 
-	a.sendReply(ctx, msg.ChatJID, response)
+	a.sendReply(ctx, msg.ChatID, response)
 }
 
 // executeCopilotCLI runs Copilot CLI with the given prompt and returns the response.
@@ -438,15 +438,15 @@ func (a *CopilotAgent) setChatEffort(chatJID, effort string) {
 	a.chatEfforts[chatJID] = effort
 }
 
-// sendReply sends a message back via WhatsApp.
-func (a *CopilotAgent) sendReply(ctx context.Context, chatJID, message string) {
-	if err := a.waClient.SendMessage(ctx, chatJID, message); err != nil {
+// sendReply sends a message back via Telegram.
+func (a *CopilotAgent) sendReply(ctx context.Context, chatID, message string) {
+	if err := a.tgClient.SendMessage(ctx, chatID, message); err != nil {
 		a.logger.Printf("[copilot-agent] Failed to send reply: %v", err)
 		if a.pendingQueue != nil {
-			a.pendingQueue.Add(chatJID, message)
+			a.pendingQueue.Add(chatID, message)
 		}
 	} else {
-		a.logger.Printf("[copilot-agent] Sent reply to %s (%d chars)", chatJID, len(message))
+		a.logger.Printf("[copilot-agent] Sent reply to %s (%d chars)", chatID, len(message))
 	}
 }
 

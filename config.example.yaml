@@ -1,11 +1,13 @@
 # OfficeClaw Configuration
 # Copy this file to config.yaml and customize as needed.
 
-# WhatsApp Integration
-# On first run, scan the QR code with your WhatsApp mobile app to link.
-whatsapp:
-  # Path to SQLite database for WhatsApp session storage
-  database_path: "whatsapp.db"
+# Telegram Bot Integration
+# Create a bot via @BotFather on Telegram to get a token.
+# For groups: disable privacy mode via @BotFather (/setprivacy -> Disabled)
+# so the bot can see non-command messages.
+telegram:
+  # Bot token from @BotFather (or set TELEGRAM_BOT_TOKEN env var)
+  bot_token: ""
   # Trigger prefix - messages starting with this will be processed by OfficeClaw agent
   trigger_prefix: "OC:"
   # Trigger prefix for direct Claude CLI agent mode (bypasses OfficeClaw agent)
@@ -22,6 +24,12 @@ whatsapp:
   claude_session_reset_keyword: "reset"
   # Default task when none specified in message
   default_task: "assist"
+  # Allowed chat IDs for access control.
+  # If empty, all chats are accepted (chat IDs are logged for easy setup).
+  # Run the bot once, send a message, and check the log for your chat ID.
+  # allowed_chat_ids:
+  #   - 123456789
+  #   - -987654321  # Group chats have negative IDs
   # Machine targeting: use @hostname after the trigger prefix to target specific machines.
   # The machine name is resolved automatically from the OS hostname (first segment of FQDN).
   # Example: OCC: @office1 refactor main.go
@@ -75,7 +83,7 @@ tools:
       - "C:\\Projects"
     max_file_size_mb: 10
 
-  # WhatsApp reply tool (auto-configured)
+  # Telegram reply tool (auto-configured)
   messaging:
     enabled: true
 
@@ -135,7 +143,7 @@ tasks:
   # Predefined command tasks
   # The agent matches user requests to tasks by description, so use clear descriptions.
   # Example:
-  #   User says: "set up a build" → agent matches "setupbuild" by description
+  #   User says: "set up a build" -> agent matches "setupbuild" by description
   setupbuild:
     description: "Set up a new OS repository build on the machine"
     command: "c:\\tools\\setup-build.ps1 -branch main"

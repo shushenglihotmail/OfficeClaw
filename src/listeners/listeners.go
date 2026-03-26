@@ -1,12 +1,12 @@
 // Package listeners provides message listening interfaces.
-// The primary implementation is WhatsApp via the whatsapp package.
+// The primary implementation is Telegram via the telegram package.
 package listeners
 
 import "context"
 
 // IncomingMessage represents a trigger message from any source.
 type IncomingMessage struct {
-	Source   string // "whatsapp"
+	Source   string // "telegram"
 	ID       string // Message ID
 	From     string // Sender identifier
 	Body     string // Message body content

@@ -3,7 +3,7 @@ package test
 import (
 	"testing"
 
-	"github.com/officeclaw/src/whatsapp"
+	"github.com/officeclaw/src/telegram"
 )
 
 func TestParseMachineTarget(t *testing.T) {
@@ -71,7 +71,7 @@ func TestParseMachineTarget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			targets, remaining := whatsapp.ParseMachineTarget(tt.input)
+			targets, remaining := telegram.ParseMachineTarget(tt.input)
 
 			// Check targets
 			if tt.expectedTargets == nil {

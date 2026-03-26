@@ -5,23 +5,23 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/officeclaw/src/whatsapp"
+	"github.com/officeclaw/src/telegram"
 )
 
-// MessagingTool allows the LLM to send WhatsApp messages.
+// MessagingTool allows the LLM to send Telegram messages.
 type MessagingTool struct {
-	client *whatsapp.Client
+	client *telegram.Client
 }
 
-// NewMessagingTool creates a messaging tool with a WhatsApp client.
-func NewMessagingTool(client *whatsapp.Client) *MessagingTool {
+// NewMessagingTool creates a messaging tool with a Telegram client.
+func NewMessagingTool(client *telegram.Client) *MessagingTool {
 	return &MessagingTool{client: client}
 }
 
 func (t *MessagingTool) Name() string { return "send_message" }
 
 func (t *MessagingTool) Description() string {
-	return "Send a WhatsApp message reply. Use this to respond to the user's WhatsApp message."
+	return "Send a Telegram message reply. Use this to respond to the user's Telegram message."
 }
 
 func (t *MessagingTool) Parameters() map[string]interface{} {
@@ -30,7 +30,7 @@ func (t *MessagingTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"chat_id": map[string]interface{}{
 				"type":        "string",
-				"description": "WhatsApp chat JID to send the message to",
+				"description": "Telegram chat ID to send the message to",
 			},
 			"message": map[string]interface{}{
 				"type":        "string",

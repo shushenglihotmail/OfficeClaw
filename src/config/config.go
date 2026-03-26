@@ -11,7 +11,7 @@ import (
 
 // Config is the root configuration for OfficeClaw.
 type Config struct {
-	WhatsApp  WhatsAppConfig  `yaml:"whatsapp"`
+	Telegram  TelegramConfig  `yaml:"telegram"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Tools     ToolsConfig     `yaml:"tools"`
 	Tasks     map[string]Task `yaml:"tasks"`
@@ -19,10 +19,10 @@ type Config struct {
 	Logging   LoggingConfig   `yaml:"logging"`
 }
 
-// WhatsAppConfig holds WhatsApp integration settings.
-type WhatsAppConfig struct {
-	// Path to SQLite database for session storage
-	DatabasePath string `yaml:"database_path"`
+// TelegramConfig holds Telegram Bot API integration settings.
+type TelegramConfig struct {
+	// Bot token from @BotFather
+	BotToken string `yaml:"bot_token"`
 	// Trigger prefix for OfficeClaw agent (e.g., "OC:")
 	TriggerPrefix string `yaml:"trigger_prefix"`
 	// Trigger prefix for Claude CLI agent (e.g., "OCC:")
@@ -35,6 +35,9 @@ type WhatsAppConfig struct {
 	ClaudeSessionResetKeyword string `yaml:"claude_session_reset_keyword"`
 	// Default task when none specified in message
 	DefaultTask string `yaml:"default_task"`
+	// Allowed chat IDs for access control (empty = allow all chats)
+	// Run the bot once and check logs to find chat IDs, then add them here.
+	AllowedChatIDs []int64 `yaml:"allowed_chat_ids"`
 }
 
 // LLMConfig holds multi-provider LLM settings.
@@ -115,7 +118,7 @@ type FileAccessConfig struct {
 	MaxFileSizeMB int      `yaml:"max_file_size_mb"`
 }
 
-// MessagingConfig for WhatsApp reply tool.
+// MessagingConfig for Telegram reply tool.
 type MessagingConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
@@ -208,32 +211,29 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		cfg.LLM.OpenAI.APIKey = v
 	}
-	if v := os.Getenv("WHATSAPP_DB_PATH"); v != "" {
-		cfg.WhatsApp.DatabasePath = v
+	if v := os.Getenv("TELEGRAM_BOT_TOKEN"); v != "" {
+		cfg.Telegram.BotToken = v
 	}
 }
 
 // applyDefaults fills in zero values with sensible defaults.
 func applyDefaults(cfg *Config) {
-	// WhatsApp defaults
-	if cfg.WhatsApp.DatabasePath == "" {
-		cfg.WhatsApp.DatabasePath = "whatsapp.db"
+	// Telegram defaults
+	if cfg.Telegram.TriggerPrefix == "" {
+		cfg.Telegram.TriggerPrefix = "OC:"
 	}
-	if cfg.WhatsApp.TriggerPrefix == "" {
-		cfg.WhatsApp.TriggerPrefix = "OC:"
+	if cfg.Telegram.ClaudeTrigger == "" {
+		cfg.Telegram.ClaudeTrigger = "OCC:"
 	}
-	if cfg.WhatsApp.ClaudeTrigger == "" {
-		cfg.WhatsApp.ClaudeTrigger = "OCC:"
+	if cfg.Telegram.ClaudeSessionResetKeyword == "" {
+		cfg.Telegram.ClaudeSessionResetKeyword = "reset"
 	}
-	if cfg.WhatsApp.ClaudeSessionResetKeyword == "" {
-		cfg.WhatsApp.ClaudeSessionResetKeyword = "reset"
-	}
-	if cfg.WhatsApp.CopilotWorkingFolder == "" {
-		cfg.WhatsApp.CopilotWorkingFolder = cfg.WhatsApp.ClaudeWorkingFolder
+	if cfg.Telegram.CopilotWorkingFolder == "" {
+		cfg.Telegram.CopilotWorkingFolder = cfg.Telegram.ClaudeWorkingFolder
 	}
 	// ClaudeWorkingFolder defaults to current directory if not set
-	if cfg.WhatsApp.DefaultTask == "" {
-		cfg.WhatsApp.DefaultTask = "assist"
+	if cfg.Telegram.DefaultTask == "" {
+		cfg.Telegram.DefaultTask = "assist"
 	}
 
 	// LLM defaults

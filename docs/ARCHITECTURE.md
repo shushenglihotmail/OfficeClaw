@@ -2,7 +2,7 @@
 
 ## Overview
 
-OfficeClaw is an AI Agent system running as a Windows desktop application. It monitors WhatsApp for trigger messages, processes them through LLMs with tool-calling capabilities, and executes actions autonomously.
+OfficeClaw is an AI Agent system running as a Windows desktop application. It monitors Telegram for trigger messages, processes them through LLMs with tool-calling capabilities, and executes actions autonomously.
 
 ## System Architecture
 
@@ -11,9 +11,10 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 │                        OfficeClaw                              │
 │                                                                │
 │  ┌──────────────────┐      ┌────────────────────────┐         │
-│  │    WhatsApp      │      │    Task Scheduler      │         │
-│  │    Listener      │      │    (cron-based)        │         │
-│  │  (whatsmeow)     │      │                        │         │
+│  │    Telegram       │      │    Task Scheduler      │         │
+│  │    Listener       │      │    (cron-based)        │         │
+│  │(go-telegram-bot-  │      │                        │         │
+│  │  api)             │      │                        │         │
 │  └────────┬─────────┘      └───────────┬────────────┘         │
 │           │                            │                       │
 │           ├── "OC:" ──────┐            │                       │
@@ -80,7 +81,7 @@ OfficeClaw is an AI Agent system running as a Windows desktop application. It mo
 |-------------|--------------------------------------------------------|
 | `main`      | Entry point, dependency wiring, signal handling, MCP subcommand |
 | `config`    | YAML config loading, validation, env var overrides      |
-| `whatsapp`  | WhatsApp Web integration via whatsmeow, auto-reconnection |
+| `telegram`  | Telegram Bot API integration via go-telegram-bot-api, auto-reconnection |
 | `llm`       | Multi-provider LLM client (Claude CLI, Copilot CLI, Azure, OpenAI) |
 | `agent`     | Core agent loop, Claude/Copilot CLI agents, unified command system |
 | `tools`     | Extensible tool registry + built-in tools               |
@@ -97,7 +98,7 @@ OfficeClaw supports three trigger prefixes (all case-insensitive):
 
 ### OC: Mode (OfficeClaw Agent)
 Uses the custom OfficeClaw agent with tool orchestration:
-1. WhatsApp listener detects a message starting with "OC:"
+1. Telegram listener detects a message starting with "OC:"
 2. Message is parsed for task name (or uses default task)
 3. Agent builds a prompt with message context and sends it to the LLM
 4. LLM responds with text and/or tool calls
@@ -107,21 +108,21 @@ Uses the custom OfficeClaw agent with tool orchestration:
 
 ### OCC: Mode (Claude CLI Agent)
 Invokes Claude CLI directly as an autonomous agent with **session persistence via `--resume`**:
-1. WhatsApp listener detects a message starting with "OCC:"
+1. Telegram listener detects a message starting with "OCC:"
 2. Claude CLI is spawned with `-p --dangerously-skip-permissions --resume <session-id>`
 3. OfficeClaw configures itself as MCP server via `--mcp-config`
 4. Claude CLI runs in the configured `claude_working_folder`
 5. Claude executes autonomously using its built-in tools + OfficeClaw tools via MCP
-6. Final response is sent back via WhatsApp
+6. Final response is sent back via Telegram
 
 ### OCCO: Mode (Copilot CLI Agent)
 Invokes GitHub Copilot CLI as an autonomous agent with **session persistence via `--resume`**:
-1. WhatsApp listener detects a message starting with "OCCO:"
+1. Telegram listener detects a message starting with "OCCO:"
 2. Copilot CLI is spawned with `-p --allow-all --output-format json --resume=<sessionId>`
 3. OfficeClaw configures itself as MCP server via `--additional-mcp-config`
 4. Copilot CLI runs in the configured `copilot_working_folder`
 5. Copilot executes autonomously using its built-in tools + OfficeClaw tools via MCP
-6. Final response extracted from JSONL output and sent back via WhatsApp
+6. Final response extracted from JSONL output and sent back via Telegram
 
 ### Session Management
 - Each request spawns a new CLI process but uses `--resume` with the same session ID
@@ -134,33 +135,32 @@ OCCO: mode additionally supports `/effort` for reasoning effort levels.
 OC: mode additionally supports `/clear` and `/summary`.
 
 ### Global Commands
-Global commands are handled at the WhatsApp layer before agent dispatch, so they work regardless of which agent mode is used:
-- `/mute` — Mute this instance (only `/unmute` and `/ping` will be processed while muted)
-- `/unmute` — Unmute this instance
-- `/ping` — Show machine name, mute state, and available modes
+Global commands are handled at the Telegram layer before agent dispatch, so they work regardless of which agent mode is used:
+- `/mute` -- Mute this instance (only `/unmute` and `/ping` will be processed while muted)
+- `/unmute` -- Unmute this instance
+- `/ping` -- Show machine name, mute state, and available modes
 
 Mute state is in-memory and resets to unmuted on restart. Machine targeting works with global commands (e.g., `OCC: @home /mute`).
 
 ### Machine Targeting
-Messages can target specific machines: `OCC: @home hello` — only the machine named "home" responds. Machine names are resolved automatically from the OS hostname (first segment of FQDN). Works with all trigger prefixes.
+Messages can target specific machines: `OCC: @home hello` -- only the machine named "home" responds. Machine names are resolved automatically from the OS hostname (first segment of FQDN). Works with all trigger prefixes.
 
 ### Graceful Shutdown
 On shutdown (signal or tray quit):
-1. Stops accepting new WhatsApp messages
+1. Stops accepting new Telegram messages
 2. Cancels running CLI sessions (30s timeout)
 3. Waits for in-flight message handlers to complete
 4. Saves unsent replies to `pending_messages.json` for retry on next startup
-5. Disconnects WhatsApp
+5. Disconnects from Telegram
 
-## WhatsApp Integration
+## Telegram Integration
 
-OfficeClaw uses the [whatsmeow](https://github.com/tulir/whatsmeow) library for WhatsApp Web integration:
+OfficeClaw uses the [go-telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api) library for Telegram Bot API integration:
 
-1. First run: QR code displayed for scanning with WhatsApp mobile app
-2. Session stored in SQLite database (`whatsapp.db`)
-3. Subsequent runs: Auto-reconnects using saved session
-4. Messages starting with trigger prefix are processed by the agent
-5. Agent replies via the same WhatsApp chat
+1. Bot token configured via `telegram.bot_token` (obtained from @BotFather)
+2. Optionally restrict to specific chats via `telegram.allowed_chat_ids`
+3. Bot polls for updates and processes messages starting with trigger prefixes
+4. Agent replies via the same Telegram chat
 
 ## LLM Integration
 

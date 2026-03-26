@@ -3,9 +3,10 @@
 ## Full Configuration
 
 ```yaml
-# WhatsApp Integration
-whatsapp:
-  database_path: "whatsapp.db"    # SQLite database for session storage
+# Telegram Integration
+telegram:
+  bot_token: ""                   # Telegram Bot API token (from @BotFather)
+  allowed_chat_ids: []            # List of allowed chat IDs (empty = allow all)
   trigger_prefix: "OC:"           # Prefix for OfficeClaw agent mode
   claude_trigger: "OCC:"          # Prefix for direct Claude CLI agent mode
   # Copilot CLI trigger is hardcoded as "OCCO:" (not configurable)
@@ -48,7 +49,7 @@ llm:
 # Tools
 tools:
   messaging:
-    enabled: true                 # WhatsApp reply tool
+    enabled: true                 # Telegram reply tool
   file_access:
     enabled: true
     allowed_paths:                # Whitelist for file read access
@@ -105,16 +106,17 @@ logging:
   max_backups: 3
 ```
 
-## WhatsApp Setup
+## Telegram Bot Setup
 
-On first run, OfficeClaw displays a QR code in the terminal:
+OfficeClaw connects to Telegram using the Bot API:
 
-1. Open WhatsApp on your phone
-2. Go to **Settings → Linked Devices → Link a Device**
-3. Scan the QR code displayed in the terminal
-4. Session is saved to `whatsapp.db`
+1. Open Telegram and message [@BotFather](https://t.me/BotFather)
+2. Send `/newbot` and follow the prompts to create a new bot
+3. Copy the bot token provided by BotFather
+4. Set the token in `telegram.bot_token` in your `config.yaml`
+5. Optionally, restrict the bot to specific chats by adding chat IDs to `telegram.allowed_chat_ids`
 
-Subsequent runs automatically reconnect using the saved session.
+To find a chat ID, send a message to your bot and check the Telegram Bot API `getUpdates` endpoint, or use a bot like [@userinfobot](https://t.me/userinfobot).
 
 ## LLM Provider Setup
 
@@ -190,7 +192,7 @@ llm:
 | `AZURE_OPENAI_ENDPOINT` | `llm.azure.endpoint` |
 | `AZURE_OPENAI_API_KEY` | `llm.azure.api_key` |
 | `OPENAI_API_KEY` | `llm.openai.api_key` |
-| `WHATSAPP_DB_PATH` | `whatsapp.database_path` |
+| `TELEGRAM_BOT_TOKEN` | `telegram.bot_token` |
 
 ## Trigger Message Format
 
@@ -239,7 +241,7 @@ Examples:
 Both CLI agents maintain conversation context across messages using `--resume`. Each request spawns a new CLI process but reuses the same session ID.
 
 ### Machine Targeting
-When multiple OfficeClaw instances share one WhatsApp account, target specific machines:
+When multiple OfficeClaw instances share one Telegram bot, target specific machines:
 ```
 OCC: @home refactor main.go        # Only "home" responds
 OC: @home,office check status      # Both respond
@@ -321,7 +323,7 @@ claude mcp add --transport stdio officeclaw -- C:\path\to\officeclaw.exe mcp ser
 | `view_task_log` | View task execution logs (list running tasks, find recent logs, read log contents) |
 | `vpn_control` | Connect/disconnect VPN, check status |
 
-**Note**: The `send_message` tool requires an active WhatsApp connection and is only available when running the full OfficeClaw application, not in standalone MCP mode.
+**Note**: The `send_message` tool requires an active Telegram connection and is only available when running the full OfficeClaw application, not in standalone MCP mode.
 
 ### Automatic MCP in OCC: Mode
 

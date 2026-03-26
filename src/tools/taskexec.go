@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/officeclaw/src/tasks"
-	"github.com/officeclaw/src/whatsapp"
+	"github.com/officeclaw/src/telegram"
 )
 
 // AsyncThreshold is the timeout (seconds) above which tasks automatically run async.
@@ -15,22 +15,22 @@ const AsyncThreshold = 180
 
 // TaskExecutionTool allows the LLM to run preconfigured tasks.
 type TaskExecutionTool struct {
-	executor    *tasks.Executor
-	waClient    *whatsapp.Client
-	lastChatJID string // Track last chat for notifications
+	executor   *tasks.Executor
+	tgClient   *telegram.Client
+	lastChatID string // Track last chat for notifications
 }
 
 // NewTaskExecutionTool creates a task execution tool.
-func NewTaskExecutionTool(executor *tasks.Executor, waClient *whatsapp.Client) *TaskExecutionTool {
+func NewTaskExecutionTool(executor *tasks.Executor, tgClient *telegram.Client) *TaskExecutionTool {
 	return &TaskExecutionTool{
 		executor: executor,
-		waClient: waClient,
+		tgClient: tgClient,
 	}
 }
 
-// SetChatJID sets the chat JID for async completion notifications.
-func (t *TaskExecutionTool) SetChatJID(chatJID string) {
-	t.lastChatJID = chatJID
+// SetChatID sets the chat ID for async completion notifications.
+func (t *TaskExecutionTool) SetChatID(chatID string) {
+	t.lastChatID = chatID
 }
 
 func (t *TaskExecutionTool) Name() string { return "execute_task" }
@@ -119,10 +119,10 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 
 	if runAsync {
 		// Run asynchronously
-		chatJID := t.lastChatJID
+		chatID := t.lastChatID
 		taskID, logFile, err := t.executor.ExecuteAsync(ctx, args.TaskName, args.Parameters,
 			func(result *tasks.TaskResult) {
-				t.notifyComplete(chatJID, result)
+				t.notifyComplete(chatID, result)
 			})
 		if err != nil {
 			return "", fmt.Errorf("starting async task: %w", err)
@@ -131,7 +131,7 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 		return fmt.Sprintf("Task '%s' started in background.\n"+
 			"Task ID: %s\n"+
 			"Log file: %s\n"+
-			"You will be notified via WhatsApp when it completes.",
+			"You will be notified via Telegram when it completes.",
 			args.TaskName, taskID, logFile), nil
 	}
 
@@ -143,9 +143,9 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 	return result.String(), nil
 }
 
-// notifyComplete sends a WhatsApp notification when an async task completes.
-func (t *TaskExecutionTool) notifyComplete(chatJID string, result *tasks.TaskResult) {
-	if t.waClient == nil || chatJID == "" {
+// notifyComplete sends a Telegram notification when an async task completes.
+func (t *TaskExecutionTool) notifyComplete(chatID string, result *tasks.TaskResult) {
+	if t.tgClient == nil || chatID == "" {
 		return
 	}
 
@@ -174,7 +174,7 @@ func (t *TaskExecutionTool) notifyComplete(chatJID string, result *tasks.TaskRes
 	}
 
 	// Send notification
-	_ = t.waClient.SendMessage(context.Background(), chatJID, sb.String())
+	_ = t.tgClient.SendMessage(context.Background(), chatID, sb.String())
 }
 
 func min(a, b int) int {

@@ -27,7 +27,7 @@ const MaxToolCallRounds = 20
 // SystemPromptBase provides the LLM with context about its role and capabilities.
 // Tool descriptions are appended dynamically at startup.
 const SystemPromptBase = `You are OfficeClaw, an AI assistant running as a Windows background agent.
-You monitor WhatsApp for trigger messages and help users accomplish tasks remotely.
+You monitor Telegram for trigger messages and help users accomplish tasks remotely.
 
 CRITICAL RULES:
 - NEVER tell the user a tool succeeded before you receive the tool result. Execute the tool FIRST, wait for the result, then report.
@@ -336,7 +336,7 @@ func (a *Agent) buildPrompt(msg IncomingMessage) string {
 	task := a.resolveTask(msg.Task)
 
 	var sb strings.Builder
-	sb.WriteString("=== Incoming WhatsApp Message ===\n")
+	sb.WriteString("=== Incoming Telegram Message ===\n")
 	sb.WriteString(fmt.Sprintf("From: %s\n", msg.Sender))
 	sb.WriteString(fmt.Sprintf("Chat ID: %s\n", msg.ChatID))
 

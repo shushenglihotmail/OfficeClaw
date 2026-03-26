@@ -1,24 +1,24 @@
 # OfficeClaw
 
-An AI Agent system for Windows that monitors WhatsApp messages, processes them through LLM models, and executes tasks autonomously on your office machine.
+An AI Agent system for Windows that monitors Telegram messages, processes them through LLM models, and executes tasks autonomously on your office machine.
 
 ## Features
 
 - **24/7 Background Agent**: Runs as a desktop app with system tray icon
-- **WhatsApp Integration**: Monitor and respond to messages via WhatsApp Web with auto-reconnection
+- **Telegram Bot Integration**: Monitor and respond to messages via Telegram Bot API with auto-reconnection
 - **Multi-Provider LLM**: Claude (via CLI with SSO), GitHub Copilot (via CLI), Azure OpenAI, OpenAI
 - **Three Agent Modes**: OC: (custom agent), OCC: (Claude CLI), OCCO: (Copilot CLI) — all optional, graceful degradation
 - **Extensible Tool System**: Reply to messages, read local files, execute tasks, view task logs, manage VPN
-- **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and WhatsApp notifications
+- **Task Execution Engine**: Predefined tasks with timeout, streaming logs, async execution, and Telegram notifications
 - **MCP Server**: Exposes OfficeClaw tools to Claude CLI and Copilot CLI for seamless integration
 - **Unified Command System**: `/model`, `/models`, `/reset`, `/effort`, `/mute`, `/unmute`, `/ping` and more across all modes
-- **Machine Targeting**: Route messages to specific machines when multiple instances share one WhatsApp account
+- **Machine Targeting**: Route messages to specific machines when multiple instances share one Telegram bot
 - **Graceful Shutdown**: Pending message queue for reliability
 - **Observability**: OpenTelemetry + Prometheus metrics
 
 ## How It Works
 
-Send a WhatsApp message to yourself with a trigger prefix:
+Send a Telegram message to your bot with a trigger prefix:
 
 ### OC: Mode (OfficeClaw Agent)
 Uses the OfficeClaw agent with custom tools (file access, task execution, messaging):
@@ -59,7 +59,7 @@ OCC: /unmute              # Unmute this instance
 ```
 
 ### Machine Targeting
-When multiple OfficeClaw instances share one WhatsApp account:
+When multiple OfficeClaw instances share one Telegram bot:
 ```
 OCC: @home refactor main.go      # Only "home" machine responds
 OC: @home,office check disk      # Both respond
@@ -76,13 +76,13 @@ make build-console
 
 # Configure
 cp config.example.yaml config.yaml
-# Edit config.yaml if needed
+# Edit config.yaml: add your Telegram bot token from @BotFather
 
 # Run (with system tray)
 ./build/officeclaw.exe
 ```
 
-On first run, scan the QR code with your WhatsApp mobile app to link the session.
+The bot connects immediately — no QR codes or device linking needed.
 
 ## Project Structure
 
@@ -91,7 +91,7 @@ OfficeClaw/
 ├── src/                    # Source code
 │   ├── main.go             # Entry point
 │   ├── agent/              # Core agent orchestrator + CLI agents
-│   ├── whatsapp/           # WhatsApp Web integration
+│   ├── telegram/           # Telegram Bot API integration
 │   ├── config/             # Configuration management
 │   ├── llm/                # LLM provider integrations
 │   ├── tools/              # Extensible tool system

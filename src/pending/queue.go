@@ -1,4 +1,4 @@
-// Package pending implements a persistent message queue for unsent WhatsApp replies.
+// Package pending implements a persistent message queue for unsent Telegram replies.
 // When OfficeClaw shuts down with in-flight messages, unsent replies are saved to disk
 // and retried on the next startup.
 package pending
@@ -12,17 +12,17 @@ import (
 	"time"
 )
 
-// Message represents an unsent WhatsApp reply.
+// Message represents an unsent Telegram reply.
 type Message struct {
-	ChatJID   string    `json:"chat_jid"`
+	ChatID    string    `json:"chat_id"`
 	Text      string    `json:"text"`
 	CreatedAt time.Time `json:"created_at"`
 	Attempts  int       `json:"attempts"`
 }
 
-// Sender is the interface for sending WhatsApp messages.
+// Sender is the interface for sending Telegram messages.
 type Sender interface {
-	SendMessage(ctx context.Context, chatJID string, text string) error
+	SendMessage(ctx context.Context, chatID string, text string) error
 	IsConnected() bool
 }
 
@@ -45,16 +45,16 @@ func NewQueue(filePath string, logger *log.Logger) *Queue {
 }
 
 // Add enqueues a message for later delivery.
-func (q *Queue) Add(chatJID, text string) {
+func (q *Queue) Add(chatID, text string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.messages = append(q.messages, Message{
-		ChatJID:   chatJID,
+		ChatID:    chatID,
 		Text:      text,
 		CreatedAt: time.Now(),
 	})
 	q.save()
-	q.logger.Printf("[pending] Queued message for %s (%d chars)", chatJID, len(text))
+	q.logger.Printf("[pending] Queued message for %s (%d chars)", chatID, len(text))
 }
 
 // Len returns the number of pending messages.
@@ -82,23 +82,23 @@ func (q *Queue) Drain(ctx context.Context, sender Sender, maxAge time.Duration) 
 	for _, msg := range q.messages {
 		// Discard messages older than maxAge
 		if now.Sub(msg.CreatedAt) > maxAge {
-			q.logger.Printf("[pending] Discarding expired message for %s (age: %v)", msg.ChatJID, now.Sub(msg.CreatedAt))
+			q.logger.Printf("[pending] Discarding expired message for %s (age: %v)", msg.ChatID, now.Sub(msg.CreatedAt))
 			continue
 		}
 
 		// Try to send
-		if err := sender.SendMessage(ctx, msg.ChatJID, msg.Text); err != nil {
+		if err := sender.SendMessage(ctx, msg.ChatID, msg.Text); err != nil {
 			msg.Attempts++
-			q.logger.Printf("[pending] Failed to send to %s (attempt %d): %v", msg.ChatJID, msg.Attempts, err)
+			q.logger.Printf("[pending] Failed to send to %s (attempt %d): %v", msg.ChatID, msg.Attempts, err)
 
 			// Keep for retry if under max attempts
 			if msg.Attempts < 5 {
 				remaining = append(remaining, msg)
 			} else {
-				q.logger.Printf("[pending] Giving up on message for %s after %d attempts", msg.ChatJID, msg.Attempts)
+				q.logger.Printf("[pending] Giving up on message for %s after %d attempts", msg.ChatID, msg.Attempts)
 			}
 		} else {
-			q.logger.Printf("[pending] Successfully sent pending message to %s", msg.ChatJID)
+			q.logger.Printf("[pending] Successfully sent pending message to %s", msg.ChatID)
 		}
 	}
 

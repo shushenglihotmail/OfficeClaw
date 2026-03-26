@@ -18,7 +18,7 @@ import (
 
 	"github.com/officeclaw/src/memory"
 	"github.com/officeclaw/src/pending"
-	"github.com/officeclaw/src/whatsapp"
+	"github.com/officeclaw/src/telegram"
 )
 
 // ClaudeAgent handles messages by invoking Claude CLI directly as an agent.
@@ -28,7 +28,7 @@ type ClaudeAgent struct {
 	cliPath         string
 	workingFolder   string
 	officeClawPath  string // Path to OfficeClaw executable for MCP server
-	waClient        *whatsapp.Client
+	tgClient        *telegram.Client
 	memoryClient    *memory.Client // Optional: nil if memory service not available
 	logger          *log.Logger
 	timeout         time.Duration
@@ -54,7 +54,7 @@ type ClaudeAgent struct {
 type ClaudeAgentConfig struct {
 	CLIPath       string           // Path to Claude CLI (auto-detected if empty)
 	WorkingFolder string           // Working directory for Claude CLI
-	WAClient      *whatsapp.Client // WhatsApp client for sending replies
+	TGClient      *telegram.Client // Telegram client for sending replies
 	MemoryClient  *memory.Client   // Optional: memory service client for logging
 	PendingQueue  *pending.Queue   // Optional: queue for unsent messages
 	Logger        *log.Logger
@@ -108,7 +108,7 @@ func NewClaudeAgent(cfg ClaudeAgentConfig) (*ClaudeAgent, error) {
 		cliPath:        cliPath,
 		workingFolder:  workingFolder,
 		officeClawPath: officeClawPath,
-		waClient:       cfg.WAClient,
+		tgClient:       cfg.TGClient,
 		memoryClient:   cfg.MemoryClient,
 		pendingQueue:   cfg.PendingQueue,
 		logger:         cfg.Logger,
@@ -146,35 +146,35 @@ func (a *ClaudeAgent) clearSession(chatJID string) {
 // HandleMessage processes a message using Claude CLI as an autonomous agent.
 // Conversation context is maintained per-chat using --resume with session IDs.
 // Send the reset keyword (default: "reset") to start a new session for that chat.
-func (a *ClaudeAgent) HandleMessage(ctx context.Context, msg whatsapp.IncomingMessage) {
+func (a *ClaudeAgent) HandleMessage(ctx context.Context, msg telegram.IncomingMessage) {
 	a.logger.Printf("[claude-agent] Processing message from %s (chat: %s): %s",
-		msg.SenderJID, msg.ChatJID, truncateForLog(msg.Body, 100))
+		msg.SenderID, msg.ChatID, truncateForLog(msg.Body, 100))
 
 	// Check for slash commands and legacy reset keyword
 	if cmd := ParseCommand(msg.Body); cmd != nil {
-		a.handleCommand(ctx, msg.ChatJID, cmd)
+		a.handleCommand(ctx, msg.ChatID, cmd)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(msg.Body), a.resetKeyword) {
-		a.handleCommand(ctx, msg.ChatJID, &Command{Name: "reset"})
+		a.handleCommand(ctx, msg.ChatID, &Command{Name: "reset"})
 		return
 	}
 
-	// Build the prompt with context about the WhatsApp message
-	prompt := fmt.Sprintf(`You received a WhatsApp message. Process it and provide a helpful response.
+	// Build the prompt with context about the Telegram message
+	prompt := fmt.Sprintf(`You received a Telegram message. Process it and provide a helpful response.
 
 From: %s
 Message: %s
 
 Respond directly to the user's message.`,
-		msg.SenderJID, msg.Body)
+		msg.SenderID, msg.Body)
 
 	// Log user message to memory service (async)
-	// Use existing session ID if available, otherwise use chat JID as prefix
-	sessionID := a.getSessionID(msg.ChatJID)
+	// Use existing session ID if available, otherwise use chat ID as prefix
+	sessionID := a.getSessionID(msg.ChatID)
 	memorySessionID := sessionID
 	if memorySessionID == "" {
-		memorySessionID = "occ-" + msg.ChatJID // Temporary until we get Claude's session ID
+		memorySessionID = "occ-" + msg.ChatID // Temporary until we get Claude's session ID
 	}
 	if a.memoryClient != nil {
 		go func() {
@@ -190,7 +190,7 @@ Respond directly to the user's message.`,
 	defer a.wg.Done()
 	execCtx, execCancel := context.WithCancel(a.ctx)
 	defer execCancel()
-	response, err := a.executeClaudeCLI(execCtx, msg.ChatJID, prompt)
+	response, err := a.executeClaudeCLI(execCtx, msg.ChatID, prompt)
 	if err != nil {
 		a.logger.Printf("[claude-agent] CLI error: %v", err)
 		response = fmt.Sprintf("Sorry, I encountered an error: %v", err)
@@ -199,7 +199,7 @@ Respond directly to the user's message.`,
 	// Log assistant response to memory service (async)
 	// Use updated session ID (may have been captured from CLI output)
 	if a.memoryClient != nil && response != "" {
-		finalSessionID := a.getSessionID(msg.ChatJID)
+		finalSessionID := a.getSessionID(msg.ChatID)
 		if finalSessionID == "" {
 			finalSessionID = memorySessionID
 		}
@@ -210,7 +210,7 @@ Respond directly to the user's message.`,
 		}()
 	}
 
-	a.sendReply(ctx, msg.ChatJID, response)
+	a.sendReply(ctx, msg.ChatID, response)
 }
 
 // executeClaudeCLI runs Claude CLI with the given prompt and returns the response.
@@ -401,16 +401,16 @@ func (a *ClaudeAgent) setChatModel(chatJID, model string) {
 	a.chatModels[chatJID] = model
 }
 
-// sendReply sends a message back via WhatsApp.
+// sendReply sends a message back via Telegram.
 // On failure, the message is saved to the pending queue for retry on next startup.
-func (a *ClaudeAgent) sendReply(ctx context.Context, chatJID, message string) {
-	if err := a.waClient.SendMessage(ctx, chatJID, message); err != nil {
+func (a *ClaudeAgent) sendReply(ctx context.Context, chatID, message string) {
+	if err := a.tgClient.SendMessage(ctx, chatID, message); err != nil {
 		a.logger.Printf("[claude-agent] Failed to send reply: %v", err)
 		if a.pendingQueue != nil {
-			a.pendingQueue.Add(chatJID, message)
+			a.pendingQueue.Add(chatID, message)
 		}
 	} else {
-		a.logger.Printf("[claude-agent] Sent reply to %s (%d chars)", chatJID, len(message))
+		a.logger.Printf("[claude-agent] Sent reply to %s (%d chars)", chatID, len(message))
 	}
 }
 

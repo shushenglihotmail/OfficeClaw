@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Command represents a parsed slash command from a WhatsApp message.
+// Command represents a parsed slash command from a Telegram message.
 type Command struct {
 	Name string   // e.g., "reset", "model", "models", "clear", "summary", "help"
 	Args string   // everything after the command name

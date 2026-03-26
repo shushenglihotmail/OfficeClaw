@@ -4,7 +4,6 @@
 
 - Go 1.22+
 - Windows (for system tray)
-- GCC compiler (for SQLite - required by go-sqlite3)
 - Claude Code CLI (optional, for OCC: mode, authenticated via SSO)
 - GitHub Copilot CLI (optional, for OCCO: mode, authenticated via `copilot login`)
 
@@ -33,11 +32,11 @@ make test
 src/
 ├── main.go              # Entry point, dependency wiring, MCP subcommand
 ├── agent/               # Core agent orchestration
-│   ├── agent.go         # OC: mode agent (LLM ↔ tool loop)
+│   ├── agent.go         # OC: mode agent (LLM <-> tool loop)
 │   ├── claude_agent.go  # OCC: mode (Claude CLI agent)
 │   ├── copilot_agent.go # OCCO: mode (Copilot CLI agent)
 │   └── commands.go      # Unified slash command system
-├── whatsapp/            # WhatsApp Web integration (whatsmeow + reconnection)
+├── telegram/            # Telegram Bot API integration (go-telegram-bot-api + reconnection)
 ├── config/              # Configuration (YAML + env overrides)
 ├── llm/                 # Multi-provider LLM clients
 │   ├── client.go        # Unified client & Provider interface
@@ -47,7 +46,7 @@ src/
 │   └── openai.go        # OpenAI API provider
 ├── tools/               # Extensible tool system
 │   ├── registry.go      # Tool interface & registry
-│   ├── messaging.go     # WhatsApp reply tool
+│   ├── messaging.go     # Telegram reply tool
 │   ├── fileaccess.go    # Local file read tool
 │   ├── taskexec.go      # Task execution tool (predefined only)
 │   ├── tasklog.go       # Task log viewer
@@ -95,32 +94,33 @@ Copy `config.example.yaml` to `config.yaml`. Environment variables override conf
 | `AZURE_OPENAI_ENDPOINT` | `llm.azure.endpoint` |
 | `AZURE_OPENAI_API_KEY` | `llm.azure.api_key` |
 | `OPENAI_API_KEY` | `llm.openai.api_key` |
-| `WHATSAPP_DB_PATH` | `whatsapp.database_path` |
+| `TELEGRAM_BOT_TOKEN` | `telegram.bot_token` |
 
-## WhatsApp Development
+## Telegram Development
 
-The WhatsApp integration uses [whatsmeow](https://github.com/tulir/whatsmeow):
+The Telegram integration uses [go-telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api):
 
-- Session stored in SQLite database (`whatsapp.db`)
-- First run requires QR code scan
-- Delete `whatsapp.db` to reset the session
+- Bot token obtained from [@BotFather](https://t.me/BotFather)
+- Set the token in `telegram.bot_token` in your `config.yaml`
+- Restrict access by adding allowed chat IDs to `telegram.allowed_chat_ids`
 
 ## Metrics
 
 When `telemetry.prometheus.enabled` is true, Prometheus metrics are exposed at `http://localhost:9090/metrics`:
 
-- `officeclaw.messages.received` — trigger messages received
-- `officeclaw.llm.requests` — LLM API calls (by provider, model, status)
-- `officeclaw.llm.latency_seconds` — LLM call duration
-- `officeclaw.tools.calls` — tool invocations (by tool, status)
-- `officeclaw.tasks.executed` — task executions (by task, status)
+- `officeclaw.messages.received` -- trigger messages received
+- `officeclaw.llm.requests` -- LLM API calls (by provider, model, status)
+- `officeclaw.llm.latency_seconds` -- LLM call duration
+- `officeclaw.tools.calls` -- tool invocations (by tool, status)
+- `officeclaw.tasks.executed` -- task executions (by task, status)
 
 ## Troubleshooting
 
-### WhatsApp not connecting
-- Delete `whatsapp.db` and restart to get a new QR code
-- Ensure your phone has internet connectivity
-- Check if WhatsApp Web is logged out on your phone
+### Telegram bot not responding
+- Verify the bot token is correct in `config.yaml`
+- Ensure the bot has not been revoked via @BotFather
+- Check that the chat ID is in `telegram.allowed_chat_ids` (if the list is non-empty)
+- Check OfficeClaw logs for connection errors
 
 ### Claude CLI not found
 - OCC: mode will be unavailable (OfficeClaw still starts, replies with an error for OCC: messages)
@@ -131,7 +131,3 @@ When `telemetry.prometheus.enabled` is true, Prometheus metrics are exposed at `
 - OCCO: mode will be unavailable (OfficeClaw still starts, replies with an error for OCCO: messages)
 - To enable: install GitHub Copilot CLI and run `copilot login` to authenticate
 - Set `COPILOT_CLI_PATH` environment variable if auto-detection fails
-
-### Build fails with CGO errors
-- Install GCC (e.g., via MSYS2 or TDM-GCC on Windows)
-- go-sqlite3 requires CGO for compilation

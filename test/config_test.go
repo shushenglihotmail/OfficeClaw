@@ -11,7 +11,7 @@ func TestConfigDefaults(t *testing.T) {
 	// Manually call applyDefaults indirectly by checking zero-value handling
 
 	// Verify struct initializes with zero values
-	if cfg.WhatsApp.TriggerPrefix != "" {
+	if cfg.Telegram.TriggerPrefix != "" {
 		t.Error("Expected empty TriggerPrefix before defaults")
 	}
 	if cfg.LLM.Provider != "" {
@@ -21,7 +21,7 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestConfigValidation(t *testing.T) {
 	cfg := &config.Config{
-		WhatsApp: config.WhatsAppConfig{
+		Telegram: config.TelegramConfig{
 			TriggerPrefix: "OfficeClaw:",
 			DefaultTask:   "assist",
 		},
@@ -41,7 +41,7 @@ func TestConfigValidation(t *testing.T) {
 
 func TestConfigValidationUnsupportedProvider(t *testing.T) {
 	cfg := &config.Config{
-		WhatsApp: config.WhatsAppConfig{
+		Telegram: config.TelegramConfig{
 			TriggerPrefix: "OfficeClaw:",
 			DefaultTask:   "assist",
 		},
@@ -58,7 +58,7 @@ func TestConfigValidationUnsupportedProvider(t *testing.T) {
 
 func TestConfigValidationAzureNeedsEndpoint(t *testing.T) {
 	cfg := &config.Config{
-		WhatsApp: config.WhatsAppConfig{
+		Telegram: config.TelegramConfig{
 			TriggerPrefix: "OfficeClaw:",
 			DefaultTask:   "assist",
 		},
