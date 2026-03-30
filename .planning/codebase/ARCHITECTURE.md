@@ -2,279 +2,375 @@
 
 **Analysis Date:** 2026-03-30
 
+## System Overview
+
+OfficeClaw is a Windows-native AI agent that monitors Telegram for trigger messages, processes them through LLMs with tool-calling, and executes tasks autonomously. It runs as a 24/7 desktop app with a system tray interface.
+
+```
+                         +------------------+
+                         |   Telegram API   |
+                         +--------+---------+
+                                  |
+                           Long Polling
+                                  |
+                         +--------v---------+
+                         |  telegram.Client  |  Message routing, access control,
+                         |  (client.go:647)  |  machine targeting, mute/unmute
+                         +--+-----+-----+---+
+                            |     |     |
+               OC: trigger  | OCC:|  OCCO:
+                            |     |     |
+                +-----------v-+  +v--------+  +v-----------+
+                | agent.Agent  |  |ClaudeAgent| |CopilotAgent|
+                | (agent.go    |  |(claude_   | |(copilot_   |
+                |  386 lines)  |  | agent.go  | | agent.go   |
+                |              |  | 476 lines)| | 470 lines) |
+                +------+-------+  +----+------+ +----+-------+
+                       |               |              |
+               LLM+Tool Loop    Claude CLI       Copilot CLI
+                       |          subprocess       subprocess
+                +------v-------+       |              |
+                |  llm.Client  |       |     MCP Server (stdio)
+                |  (client.go) |       +------+-------+
+                +------+-------+              |
+                       |              +-------v--------+
+               Provider routing       | mcp.Server     |
+                       |              | (server.go)    |
+          +-----+-----+-----+        +-------+--------+
+          |     |     |     |                 |
+       Claude  Azure OpenAI Copilot    tools.Registry
+        CLI                  CLI       (shared tools)
+                       |
+                +------v-------+
+                | tools.Registry|
+                | (registry.go) |
+                +------+--------+
+                       |
+     +---------+-------+------+--------+--------+-------+
+     |         |       |      |        |        |       |
+  send_msg  read_file exec_  vpn_   view_   memory_  get_
+            (file     task   control task_  search/  identity
+            access.go)(task  (vpn.  log    write
+                      exec.  go)   (task   (memory.
+                      go)          log.go) go)
+```
+
 ## Pattern Overview
 
-**Overall:** Multi-mode AI agent orchestration system with pluggable LLM providers and extensible tool registry. Three independent agent modes operate on the same Telegram channel with graceful degradation for unavailable components.
+**Overall:** Event-driven agent with dependency injection and registry patterns.
 
 **Key Characteristics:**
-- Modular provider pattern for LLM backends (Anthropic CLI, Azure OpenAI, OpenAI, Copilot CLI)
-- Registry-based tool system with unified JSON-RPC execution interface
-- Three parallel agent modes with different invocation patterns (OC:/OCC:/OCCO: prefixes)
-- Persistent session management with optional memory service integration
-- Async task execution with cron scheduling and result notifications
-- Graceful degradation when LLM providers or CLIs are unavailable
+- Manual dependency injection in `src/main.go` (no DI framework)
+- Registry pattern for tools and tasks (runtime registration)
+- Provider pattern for LLM backends (compile-time interface, runtime selection)
+- Three independent agent modes sharing a common tool registry
+- Graceful degradation: each mode is optional and fails independently
 
 ## Layers
 
-**Message Listener Layer:**
-- Purpose: Monitor Telegram for incoming messages and route to appropriate handlers
-- Location: `src/telegram/`
-- Contains: Bot API integration via long polling, message parsing, trigger detection
-- Depends on: go-telegram-bot-api library
-- Used by: Main application for message ingestion
+**Entry / Routing Layer:**
+- Purpose: Receives Telegram messages, applies access control, routes to correct agent mode
+- Location: `src/telegram/client.go`
+- Contains: Bot API client, long-polling loop, message parsing, machine targeting (`@machine` syntax), mute/unmute, trigger prefix matching (longest-first to avoid OC:/OCC:/OCCO: conflicts)
+- Depends on: `go-telegram-bot-api/v5`
+- Used by: `src/main.go` (initialization), agent handlers (callbacks)
 
-**Agent Orchestration Layer:**
-- Purpose: Core message processing loop with LLM ↔ tool-call coordination
+**Agent Layer:**
+- Purpose: Orchestrates LLM interactions for each mode
 - Location: `src/agent/`
-- Contains:
-  - `agent.go` - OC: mode orchestration (LLM + tool loop, max 20 rounds)
-  - `claude_agent.go` - OCC: mode (Claude CLI subprocess with session persistence)
-  - `copilot_agent.go` - OCCO: mode (Copilot CLI subprocess with session persistence)
-  - `commands.go` - Slash command parsing and handling
-- Depends on: LLM client, tool registry, task executor, memory service
-- Used by: Telegram client message handlers
+- Contains: Three agent implementations (OC, OCC, OCCO), unified slash command system
+- Depends on: `llm`, `tools`, `tasks`, `memory`, `telegram`, `pending`
+- Used by: Telegram client (via `MessageHandler` callbacks set in `main.go`)
 
-**LLM Provider Layer:**
-- Purpose: Multi-provider abstraction with unified request/response format
+**LLM Abstraction Layer:**
+- Purpose: Unified multi-provider LLM client with tool-calling support
 - Location: `src/llm/`
-- Contains:
-  - `client.go` - Router and unified message format
-  - `claude_cli.go` - Anthropic Claude CLI provider
-  - `azure.go` - Azure OpenAI provider
-  - `openai.go` - Direct OpenAI API provider
-  - `copilot_cli.go` - GitHub Copilot CLI provider
-- Depends on: Provider-specific SDKs and CLI executables
-- Used by: Agent orchestration layer
+- Contains: `Provider` interface, four implementations (Claude CLI, Azure, OpenAI, Copilot CLI), unified `Message`/`CompletionResponse` format, message format translation
+- Depends on: `config`
+- Used by: `agent.Agent` (OC: mode only)
 
-**Tool Execution Layer:**
-- Purpose: Registry pattern for LLM-callable tools, execution dispatcher, result formatting
+**Tool Layer:**
+- Purpose: Extensible tool registry for LLM function calling
 - Location: `src/tools/`
-- Contains:
-  - `registry.go` - Tool registration and invocation dispatcher
-  - `messaging.go` - Telegram reply tool
-  - `fileaccess.go` - Local file read (whitelist-protected)
-  - `taskexec.go` - Predefined task execution with async support
-  - `tasklog.go` - Task execution log viewing
-  - `vpn.go` - VPN management (rasdial + Entra ID)
-  - `memory.go` - Memory service tools (search, write)
-  - `identity.go` - Machine identity tool
-- Depends on: Task executor, Telegram client, memory service
-- Used by: Agent orchestration (via tool registry)
+- Contains: Registry, 8 tool implementations, `Tool` interface, generic `ParseArgs[T]()` helper
+- Depends on: `tasks`, `telegram`, `memory`, `config`
+- Used by: `agent.Agent` (OC: mode), `mcp.Server` (OCC:/OCCO: modes)
 
-**Task Execution Layer:**
-- Purpose: Task registry, subprocess execution with timeout, cron scheduling, log storage
-- Location: `src/tasks/`
-- Contains: Registry, executor with context cancellation, scheduler, structured result logging
-- Depends on: OS exec, cron library
-- Used by: Tool execution layer, main startup
-
-**Memory & Context Management:**
-- Purpose: Persistent conversation logging, semantic search, context flush detection and distillation
-- Location: `src/memory/`
-- Contains:
-  - `client.go` - HTTP client for external memory service
-  - `flush.go` - 80% context threshold detection and distillation response parsing
-- Depends on: Memory service (external, gracefully degraded if unavailable)
-- Used by: Agent orchestration for session logging and context management
+**Task Layer:**
+- Purpose: Task registration, execution (sync/async), scheduling, logging, monitoring, cancellation
+- Location: `src/tasks/executor.go` (758 lines -- largest file)
+- Contains: `Registry`, `Executor`, cron scheduler, `RunningTask` tracker, `MonitorConfig`, log file management
+- Depends on: `config`, `google/uuid`
+- Used by: `tools/taskexec.go`, `tools/tasklog.go`
 
 **MCP Server Layer:**
-- Purpose: Model Context Protocol implementation for exposing tools to Claude CLI
+- Purpose: Exposes tools to external CLI agents (Claude/Copilot) via Model Context Protocol
 - Location: `src/mcp/`
-- Contains:
-  - `server.go` - JSON-RPC stdio server
-  - `protocol.go` - MCP and JSON-RPC type definitions
-- Depends on: Tool registry (same as main agent)
-- Used by: Claude CLI agent subprocess communication
+- Contains: JSON-RPC 2.0 stdio server, MCP protocol types
+- Depends on: `tools`
+- Used by: Claude CLI agent and Copilot CLI agent (OfficeClaw spawned as MCP subprocess)
 
-**Telemetry & Observability:**
-- Purpose: OpenTelemetry tracing and Prometheus metrics
-- Location: `src/telemetry/`
-- Contains: OTEL trace provider init, Prometheus metric collectors
-- Depends on: otel and prometheus libraries
-- Used by: All layers for instrumentation
+**Memory Layer:**
+- Purpose: HTTP client for external LLMCrawl memory service (conversation logging, semantic search)
+- Location: `src/memory/`
+- Contains: REST client (`client.go`), context flush detection and distillation parsing (`flush.go`)
+- Depends on: `llm` (for `Message` type in flush detection)
+- Used by: All three agents, `tools/memory.go`
 
-**Configuration:**
-- Purpose: YAML-based configuration loading with environment variable overrides
-- Location: `src/config/`
-- Contains: Config struct definitions, file loader, environment variable expansion
-- Depends on: gopkg.in/yaml.v3
-- Used by: Main startup for all component initialization
+**Infrastructure Layer:**
+- Purpose: Cross-cutting concerns
+- Location: `src/telemetry/`, `src/pending/`, `src/config/`, `src/tray/`
+- Contains: Prometheus metrics + OpenTelemetry traces, persistent message queue (JSON file-backed), YAML config with env overrides, Windows system tray GUI
+- Used by: All other layers
 
-**UI Layer:**
-- Purpose: Windows system tray GUI for application lifecycle control
-- Location: `src/tray/`
-- Contains: System tray icon, quit menu
-- Depends on: getlantern/systray
-- Used by: Main thread (blocking)
+## Three Operating Modes
 
-## Data Flow
+### OC: Mode (OfficeClaw Agent)
 
-**OC: Mode (OfficeClaw Agent):**
+**Entry point:** `src/agent/agent.go` `HandleMessage()` (line 194)
 
-1. User sends `OC: do something` to Telegram
-2. Telegram listener detects prefix, parses task name (defaults to configured default)
-3. Telegram client calls OfficeClaw agent handler
-4. Agent builds user prompt from message context
-5. Check memory for session logging
-6. Check context usage for 80% flush threshold
-7. Enter LLM loop (max 20 rounds):
-   - Send messages + tool definitions to LLM provider
-   - LLM returns text and/or tool calls
-   - For each tool call:
-     - Dispatch to tool registry
-     - Tool executes (file read, task exec, message send, VPN, memory ops)
-     - Add result to message history
-   - If LLM returned text with no tool calls, exit loop
-8. Parse distillation markers from final response if flush triggered
-9. Log to memory service (daily logs + persistent facts)
-10. Return final response to caller (sent via messaging tool or stored in pending queue)
+**Data flow:**
+1. Telegram client receives message with `OC:` prefix
+2. Content parsed for task name (first word after prefix, defaults to `telegram.default_task`)
+3. Machine targeting (`@machine`) checked; message dropped if not for this machine
+4. Global commands (`/mute`, `/unmute`, `/ping`) handled at telegram layer
+5. Slash commands (`/clear`, `/summary`, `/help`) handled in `main.go` handler closure (lines 191-214)
+6. `Agent.HandleMessage()` called with structured `IncomingMessage`
+7. User prompt built via `buildPrompt()` -- includes chat ID, sender, task name
+8. User message logged to memory service (async goroutine)
+9. Context flush check: if messages exceed 80% of `maxContextTokens`, inject distillation prompt
+10. **Agent loop** (max 20 rounds, constant `MaxToolCallRounds` at line 25):
+    - Send messages + tool definitions to `llm.Client.Complete()`
+    - If response has no tool calls: final response, break
+    - If response has tool calls: execute each via `toolRegistry.Execute()`, append results to messages, loop
+11. If flush triggered: parse `[SUMMARY]`/`[FACTS]` markers, save to memory
+12. Final response logged to memory, added to conversation history (`a.messages`)
 
-**OCC: Mode (Claude CLI Agent):**
+**Key design detail:** The OC: agent does NOT send replies directly. The LLM must call the `send_message` tool with `chat_id` from the incoming message. This is enforced by the system prompt.
 
-1. User sends `OCC: do something` to Telegram
-2. Telegram listener detects trigger, routes to Claude agent handler
-3. Claude agent spawns `claude.exe` subprocess with `--output-format stream-json`
-4. OfficeClaw configures itself as MCP server for the session
-5. Claude CLI receives:
-   - User message
-   - Tool definitions via MCP (same tool registry as OC: mode)
-   - File access, task exec, VPN, memory, identity tools
-   - MCP communication via stdin/stdout
-6. Claude CLI autonomously uses tools and processes
-7. Final response parsed from JSON stream
-8. Response sent via Telegram (or queued to pending if send fails)
-9. Session state persisted per-chat using `--resume=sessionId`
+**State:** Conversation history stored in-memory on the `Agent` struct (`a.messages []llm.Message`). Cleared via `/clear` command. Session ID format: `oc-{YYYYMMDD-HHMMSS}-{6 hex chars}`.
 
-**OCCO: Mode (Copilot CLI Agent):**
+### OCC: Mode (Claude CLI Agent)
 
-1. User sends `OCCO: do something` to Telegram
-2. Telegram listener detects trigger, routes to Copilot agent handler
-3. Copilot agent spawns `copilot.exe` subprocess with `--allow-all` and `--output-format json`
-4. OfficeClaw configures itself as MCP server via `--additional-mcp-config`
-5. Copilot uses tools (same registry) with effort levels (low/medium/high/xhigh)
-6. Response parsed from JSONL stream
-7. Response sent via Telegram (or queued)
-8. Session persistence via `--resume=sessionId`
+**Entry point:** `src/agent/claude_agent.go` `HandleMessage()` (line 149)
 
-**State Management:**
+**Data flow:**
+1. Telegram client receives message with `OCC:` prefix, routes to `ClaudeAgent.HandleMessage()`
+2. Slash commands (`/reset`, `/model`, `/models`, `/help`) checked first; legacy reset keyword also supported
+3. Prompt built with sender and message body
+4. User message logged to memory service (async)
+5. `executeClaudeCLI()` spawns Claude CLI as subprocess (line 220):
+   - Flags: `-p`, `--dangerously-skip-permissions`, `--output-format stream-json`, `--verbose`
+   - MCP config: `--mcp-config '{"mcpServers":{"officeclaw":{"command":"<exe>","args":["mcp","serve"]}}}'`
+   - Session persistence: `--resume <sessionID>` (per-chat, captured from first response)
+   - Model override: `--model <name>` (per-chat, set with `/model` command)
+   - Prompt via stdin, working directory: `telegram.claude_working_folder`
+   - Timeout: 5 minutes default
+6. Stream-JSON output parsed via `parseStreamJSONOutput()` (line 311) -- extracts text from `assistant` events and session ID from `result` event
+7. Session ID saved for subsequent calls from same chat
+8. Response sent via `sendReply()` -- on failure, queued in `pending.Queue`
 
-- **Conversation history:** Stored in agent instance (per-session, cleared on /clear or /reset)
-- **Session ID:** Generated at agent startup (format: `oc-{timestamp}-{random}`) or retrieved from CLI agent
-- **Chat-specific model override:** Per-chat setting persisted in Claude/Copilot agent instances (survives /reset)
-- **Memory logging:** Asynchronous writes to memory service; distillation extracts summary+facts at 80% context
-- **Pending messages:** JSON file-backed queue for unsent Telegram messages; drained on startup
+**State:** `sessions map[string]string` (chatID -> sessionID), `chatModels map[string]string` (chatID -> model). Both protected by `sync.RWMutex`.
 
-## Key Abstractions
+### OCCO: Mode (Copilot CLI Agent)
 
-**Tool Interface:**
-- Purpose: Defines contract for LLM-callable operations
-- Examples: `src/tools/messaging.go`, `src/tools/taskexec.go`, `src/tools/vpn.go`
-- Pattern: Each tool implements Name(), Description(), Parameters(), Execute(ctx, args) (string, error)
-- Usage: Tool registry collects all implementations, generates tool definitions for LLM, dispatches Execute calls
+**Entry point:** `src/agent/copilot_agent.go` `HandleMessage()` (line 140)
 
-**Provider Interface:**
-- Purpose: LLM backend abstraction with unified request/response
-- Examples: Claude CLI, Azure OpenAI, OpenAI, Copilot CLI
-- Pattern: Each provider implements Name(), ChatCompletion(ctx, req)
-- Usage: Client factory selects provider based on config, all providers return standardized CompletionResponse
+**Mirrors OCC: mode with Copilot CLI differences:**
+- Flags: `-p <prompt>`, `--output-format json`, `--allow-all`, `-s`, `--no-custom-instructions`
+- MCP config via `--additional-mcp-config` (not `--mcp-config`)
+- Session persistence via `--resume=<sessionID>` (note `=` syntax)
+- Reasoning effort support: `--reasoning-effort <level>` (per-chat via `/effort` command)
+- JSONL output parsed via `parseCopilotOutput()` (line 306) -- takes last `assistant.message` event
 
-**MessageHandler Callback:**
-- Purpose: Loose coupling between Telegram client and agent layers
-- Usage: Telegram client invokes handlers for trigger messages; OC:/OCC:/OCCO: each have dedicated handlers
-- Pattern: `func(ctx context.Context, msg IncomingMessage)`
+**Additional state:** `chatEfforts map[string]string` for per-chat reasoning effort overrides (low/medium/high/xhigh).
 
-**Task Registry:**
-- Purpose: Pre-registered operations that LLM can safely invoke
-- Pattern: Tasks defined in YAML (task.command, task.timeout, task.schedule)
-- Safety: LLM cannot invent task names; execute_task tool validates against registry
+## Tool-Calling Mechanism
+
+**OC: mode** uses structured tool calls via the LLM provider:
+- **OpenAI/Azure:** Native `tool_calls` in API response (JSON function arguments, standard OpenAI format)
+- **Claude CLI provider** (`src/llm/claude_cli.go`): Tool definitions injected into system prompt as text with XML calling instructions. Claude responds with `<function_calls><invoke name="..."><parameter name="...">value</parameter></invoke></function_calls>` XML blocks. Parsed by `parseXMLToolCalls()` (line 339). Tool call IDs generated as `call_<uuid8>`.
+- **Copilot CLI provider** (`src/llm/copilot_cli.go`): Same XML injection and parsing pattern as Claude CLI.
+
+**OCC:/OCCO: modes** use MCP for tool access:
+- OfficeClaw spawns itself as MCP server subprocess (`officeclaw.exe mcp serve`)
+- MCP server reads newline-delimited JSON-RPC over stdin, writes responses to stdout, logs to stderr
+- The CLI agents (Claude/Copilot) discover and invoke tools via MCP `tools/list` and `tools/call`
+- Tools available in MCP mode: `read_file`, `execute_task`, `view_task_log`, `vpn_control`, `get_identity`, `memory_search`, `memory_write`
+- `send_message` is NOT available in MCP mode (no Telegram client in subprocess)
+
+## Task Execution System
+
+**Location:** `src/tasks/executor.go` (758 lines), `src/tools/taskexec.go` (247 lines), `src/tools/tasklog.go` (348 lines)
+
+**Registry:** Tasks defined in `config.yaml` under `tasks:`, registered at startup in `tasks.Registry`. Only predefined tasks can be executed (security boundary). LLM cannot invent task names.
+
+**Task config fields** (`src/config/config.go` line 142):
+```go
+type Task struct {
+    Description               string // Human-readable description
+    Command                   string // Shell command (empty = LLM-only task)
+    TimeoutSeconds            int    // Execution timeout
+    Schedule                  string // Cron expression for scheduled execution
+    AllowDuplicate            bool   // Allow concurrent runs (default: false)
+    MonitoringIntervalSeconds int    // If > 0, send progress every N seconds
+}
+```
+
+**Synchronous execution** (`Executor.Execute()`, line 305):
+1. Look up task in registry by name
+2. Create log file: `logs/<taskname>-<YYYYMMDD-HHMMSS>.log`
+3. Write header (task name, start time, command, timeout)
+4. Execute command via `pwsh -NoProfile -Command <cmd>` (or `-File` for `.ps1` scripts)
+5. Stream output to both in-memory buffer and log file via `io.MultiWriter`
+6. Write footer (duration, status)
+7. Return `TaskResult` with status (`success`/`error`/`timeout`), output, duration, log path
+
+**Asynchronous execution** (`Executor.ExecuteAsync()`, line 394):
+1. Generate UUID-based task ID (first 8 chars of UUID)
+2. Create log file
+3. Store `RunningTask` in `running map[string]*RunningTask` (includes cancel function)
+4. Launch goroutine with timeout context
+5. **Monitoring goroutine** (optional): if `MonitoringIntervalSeconds > 0`:
+   - `runMonitor()` (line 561) tails log file at configured interval using `readLogFrom()` offset tracking
+   - Sends last 100 lines of new output via `monitor.Send` callback (Telegram message)
+   - Stopped when task completes via `monitorDone` channel (closed by main goroutine)
+6. On completion: remove from `running` map, call `onComplete` callback (sends Telegram notification with last 20 lines)
+
+**Duplicate prevention** (`src/tools/taskexec.go`, line 136):
+- Before starting async task, iterates `ListRunningTasks()` for same `TaskName`
+- If found and `AllowDuplicate` is false (default), returns info about existing run with log file path
+- Prompt in system prompt reinforces: "Do NOT launch a task that is already running"
+
+**Cancellation** (`Executor.CancelTask()`, line 190):
+- Accepts task name OR task ID as argument
+- Finds matching entry in `running` map
+- Calls stored `Cancel()` function (context cancellation propagates to `exec.CommandContext`)
+- Removes from `running` map immediately
+- LLM invokes via `execute_task` tool with `action: "cancel"` and `task_name`
+
+**Auto-async threshold** (`src/tools/taskexec.go`, line 14):
+- Constant `AsyncThreshold = 180` seconds
+- Tasks with `TimeoutSeconds > 180` automatically run async unless `async: false` explicitly passed
+
+**Cron scheduling** (`Executor.StartScheduler()`, line 658):
+- `StartScheduler()` called from `main.go` in a goroutine
+- Iterates all tasks with `Schedule` config, calls `ScheduleTask()`
+- Each scheduled task gets its own goroutine with a 1-minute ticker
+- `matchesCron()` (line 702) implements simplified cron matching: `minute hour day month weekday`
+- Supports `*`, ranges (`1-5`), lists (`1,3,5`), and exact values
+
+**Command execution** (`executeCommand()`, line 515):
+- All commands run via `pwsh -NoProfile -Command <cmd>`
+- `.ps1` script files detected and run via `pwsh -NoProfile -File <script>`
+- Output streamed to `io.MultiWriter(buffer, logFile)`
 
 ## Entry Points
 
-**Main Application:**
-- Location: `src/main.go:main()` and `src/main.go:runApp()`
-- Triggers: Direct executable invocation
-- Responsibilities:
-  - Load config from YAML
-  - Initialize logging to file
-  - Initialize telemetry (OTEL + Prometheus)
-  - Initialize pending message queue
-  - Connect to Telegram (long polling)
-  - Initialize LLM client (optional; OC: mode disabled if unavailable)
-  - Initialize task executor with registry
-  - Initialize tool registry with per-tool configuration
-  - Create agent instances (OC: agent, Claude agent, Copilot agent)
-  - Start task scheduler
-  - Start Telegram reconnect watchdog
-  - Block on system tray GUI (main thread requirement on Windows)
-  - Graceful shutdown: cancel CLI agents, disconnect Telegram, save pending messages
+**Interactive mode** (`src/main.go` `runInteractive()`, line 48):
+- Triggers: Default when running `officeclaw.exe` without subcommands
+- Responsibilities: Full application with Telegram listener, all three agent modes, system tray
 
-**MCP Server Subcommand:**
-- Location: `src/main.go:runMCPServer()`
-- Triggers: `officeclaw mcp serve`
-- Responsibilities:
-  - Standalone MCP server for Claude CLI invocation
-  - Initialize tool registry (file access, task exec, VPN, identity, memory)
-  - Note: Telegram not available, so send_message tool excluded
-  - Listen on stdio for MCP JSON-RPC requests
-  - Execute tools via registry
-  - Return results via stdout
+**MCP server mode** (`src/main.go` `runMCPServer()`, line 339):
+- Triggers: `officeclaw.exe mcp serve` subcommand
+- Responsibilities: Stdio JSON-RPC server exposing tools to Claude/Copilot CLI
+- Differences: No Telegram client, no `send_message` tool, logs to stderr not file
 
-**Telegram Message Handler:**
-- Location: `src/telegram/client.go:Connect()` → long polling loop → MessageHandler callback
-- Triggers: Incoming Telegram message matching trigger prefix
-- Routes to:
-  - Slash command handler (if message starts with /)
-  - OC: handler (if machine targeted and message matches prefix)
-  - OCC: handler (if Claude trigger detected)
-  - OCCO: handler (if OCCO: prefix detected)
+## Configuration & Startup
+
+**Config loading** (`src/config/config.go` `Load()`, line 181):
+1. Read YAML file (default: `config.yaml`, overrideable via `-config` flag)
+2. Apply environment variable overrides: `TELEGRAM_BOT_TOKEN`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_CLI_PATH`
+3. Apply defaults (`applyDefaults()`, line 222) -- extensive defaults for all fields
+4. Validate required fields (`Validate()`, line 309) -- provider-specific validation
+
+**Initialization order** (`src/main.go` `runApp()`, line 54):
+1. Load config from YAML
+2. Setup file-based logging
+3. Initialize telemetry (OpenTelemetry + Prometheus)
+4. Initialize pending message queue (loads from `pending_messages.json`)
+5. Initialize Telegram bot client (creates bot API connection)
+6. Connect to Telegram (starts long-polling goroutine)
+7. Drain pending messages from previous session (24h expiry)
+8. Initialize LLM client (optional -- if provider empty or init fails, OC: mode disabled)
+9. Initialize task registry + executor (all tasks from config registered)
+10. Initialize tool registry + register all enabled tools
+11. Initialize memory client (optional -- health check, graceful degradation)
+12. Create OC: agent + set Telegram message handler (only if LLM client available)
+13. Create OCC: Claude agent + set handler (only if Claude CLI found)
+14. Create OCCO: Copilot agent + set handler (only if Copilot CLI found)
+15. Start task scheduler goroutine
+16. Start Telegram reconnect watchdog goroutine
+17. Setup signal handler goroutine (SIGINT, SIGTERM)
+18. **Run system tray** -- blocks main thread (Windows GUI threading requirement)
+
+**Graceful shutdown sequence** (lines 294-309):
+1. Tray quit or signal received -> `cancel()` called on root context
+2. Stop CLI agents: `claudeAgent.Stop()` and `copilotAgent.Stop()` -- cancel running CLI processes, wait up to 30s
+3. `tgClient.GracefulDisconnect(30s)`: close `shutdownCh` to reject new messages, wait for `wg` (in-flight handlers), stop polling
+
+## Concurrency Model
+
+**Main goroutine:** Blocked by `systray.Run()` in `src/tray/tray.go`. All other work runs in background goroutines. This is a Windows GUI threading requirement.
+
+**Message handling goroutines:** Each incoming Telegram message spawns a goroutine in `telegram.Client.handleMessage()` (line 358: `go func() { defer c.wg.Done(); handler(...) }()`). Tracked by `sync.WaitGroup` for graceful shutdown.
+
+**CLI agent goroutines:**
+- `ClaudeAgent` and `CopilotAgent` track running CLI processes via `sync.WaitGroup`
+- Each `HandleMessage` call runs the CLI synchronously within its handler goroutine
+- Agent-level context (`a.ctx`) propagates cancellation to running CLI processes on `Stop()`
+
+**Async task goroutines:** Each `ExecuteAsync()` call spawns a background goroutine. Optional monitoring goroutine runs per-task if configured.
+
+**Memory logging:** User and assistant messages logged via fire-and-forget goroutines (`go func() { ... }()`) to avoid blocking the agent loop.
+
+**Background goroutines started at boot:**
+- Task scheduler (`go taskExecutor.StartScheduler(ctx)`)
+- Telegram reconnect watchdog (`go tgClient.StartReconnectWatchdog(ctx)`)
+- Signal handler (`go func() { ... }()`)
+- Prometheus HTTP server (if enabled, inside `telemetry.Init()`)
+
+**Synchronization primitives:**
+- `tools.Registry`: `sync.RWMutex` protects tool map
+- `tasks.Registry`: `sync.RWMutex` protects task map
+- `tasks.Executor`: `sync.Mutex` protects `running` and `scheduled` maps
+- `telegram.Client`: `sync.RWMutex` for handlers + muted state; `sync.Mutex` for connection state
+- `ClaudeAgent` / `CopilotAgent`: `sync.RWMutex` for `sessions`, `chatModels`, `chatEfforts`
+- `pending.Queue`: `sync.Mutex` for message list
+
+**No channels for data flow.** Communication is via method calls and callbacks. Channels used only for shutdown signaling (`shutdownCh`, OS signal channel, `monitorDone`).
 
 ## Error Handling
 
-**Strategy:** Graceful degradation with async retry for transient failures.
+**Strategy:** Log and continue. Errors in optional features (memory, telemetry) do not prevent operation.
 
 **Patterns:**
-
-- **LLM Provider Unavailable:** If provider initialization fails at startup, OC: mode disabled; OCC:/OCCO: modes check CLI at invocation time and reply with helpful error
-- **Tool Execution Failure:** Error message added to conversation; LLM receives error and can retry or report to user
-- **Telegram Send Failure:** Message queued to pending_messages.json; retried on next startup with expiration (24h)
-- **Memory Service Unavailable:** Memory features disabled; conversation continues without logging
-- **Task Timeout:** Task killed with context cancellation; result marked as "timeout" status
-- **CLI Process Crash:** Claude/Copilot agent replies with error; Telegram user notified
+- **LLM errors in OC: mode:** Logged + metrics recorded, message processing abandoned (no reply sent to user)
+- **CLI errors in OCC:/OCCO:**: Error message formatted and sent back to user via Telegram
+- **Tool execution errors:** Returned to LLM as `"Error: ..."` text; LLM decides how to handle/retry
+- **Telegram send failures:** Message queued in `pending.Queue` (JSON file), retried on next startup, expired after 24h, max 5 retry attempts
+- **Config validation errors:** Fatal at startup (`log.Fatalf`)
+- **Missing optional components:** Warning logged, feature disabled, application continues
 
 ## Cross-Cutting Concerns
 
-**Logging:**
-- File-based (configured path, default: officeclaw.log)
-- Per-module loggers with prefixes ([telegram], [agent], [tools], [mcp])
-- Async writes where applicable (memory logging, task logs)
+**Logging:** Standard library `log.Logger` with `[OfficeClaw]` prefix, file output (default: `officeclaw.log`). Subsystem tags: `[agent]`, `[claude-agent]`, `[copilot-agent]`, `[task]`, `[vpn]`, `[mcp]`, `[telegram]`, `[tools]`, `[llm/claude_cli]`, `[llm/copilot_cli]`, `[llm/azure]`, `[pending]`.
 
-**Validation:**
-- File access whitelisting in fileaccess tool
-- Task name validation (only tasks in registry allowed)
-- VPN name validation (only configured VPN names allowed)
-- Chat ID validation (allowed_chat_ids filter)
-- Path canonicalization and traversal prevention in file access tool
+**Telemetry:** OpenTelemetry SDK with Prometheus exporter. Global singleton `telemetry.GlobalMetrics` (nil-safe -- all record functions no-op when nil). Helper functions: `RecordLLMRequest()`, `RecordToolCall()`, `RecordTaskExecution()`. Prometheus endpoint at `http://localhost:9090/metrics` when enabled.
+
+**Validation / Security boundaries:**
+- `telegram.allowed_chat_ids`: Access control for which Telegram chats can interact (empty = allow all)
+- `tools.file_access.allowed_paths`: Whitelist for file read tool (case-insensitive path prefix matching)
+- `tools.vpn.vpn_names`: Whitelist for VPN connections (case-insensitive)
+- Task execution: Only predefined tasks from config are allowed
+- Machine targeting: `@machine` syntax routes messages to specific instances
 
 **Authentication:**
-- Telegram: Bot token (stateless, provided by @BotFather)
-- Claude CLI: Pre-authenticated via SSO (no API key needed)
-- Copilot CLI: Pre-authenticated via GitHub OAuth (no API key needed)
-- Azure OpenAI: API key or Entra ID bearer token
-- OpenAI: API key via environment variable
-
-**Concurrency:**
-- Telegram polling: Single poller thread with sync.WaitGroup for in-flight handlers
-- Tool execution: Async dispatcher in agent loop; task exec supports both sync and async
-- Memory logging: Fire-and-forget goroutines to avoid blocking agent loop
-- Task scheduler: Separate goroutine with sync.Mutex on task registry
-- CLI agent sessions: Per-chat session tracking with RWMutex for thread-safe reads/writes
-
-**Context & Cancellation:**
-- Root context created in main, cascades to all components
-- Telegram polling uses context for shutdown signal detection
-- Task execution uses derived context with timeout
-- CLI subprocess processes can be cancelled via Stop() method
-- Graceful shutdown waits for in-flight handlers (30s timeout)
+- Telegram: Bot token from @BotFather (stateless)
+- Claude CLI: Pre-authenticated via organization SSO
+- Copilot CLI: Pre-authenticated via GitHub OAuth
+- Azure OpenAI: API key or Entra ID bearer token (`TokenProvider` callback)
+- OpenAI: API key via config or `OPENAI_API_KEY` env var
 
 ---
 

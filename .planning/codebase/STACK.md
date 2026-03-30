@@ -5,24 +5,22 @@
 ## Languages
 
 **Primary:**
-- Go 1.25.0 - Core application language, all source code in `src/` directory
+- Go 1.25.0 - All application code in `src/` directory (`go.mod` line 3)
+
+**Secondary:**
+- PowerShell - Task commands executed via `os/exec` (configured in `config.yaml` tasks section)
+- YAML - Configuration format (`config.yaml`, `config.example.yaml`)
 
 ## Runtime
 
 **Environment:**
-- Windows (primary platform, with system tray integration via `src/tray/tray.go`)
-- Binary distribution as `officeclaw.exe`
+- Go 1.25.0+ (minimum version in `go.mod`)
+- Windows 10/11 (Windows-native desktop application with system tray)
+- Binary: `build/officeclaw.exe`
 
-**Build Target:**
-- Windows GUI application (compiled with `-ldflags="-H windowsgui"` to hide console window)
-- Console builds available for development (with `-o build/officeclaw.exe`)
-
-## Package Manager
-
-**Go Modules:**
-- Lockfile: `go.mod` (required: Go 1.25.0+)
-- `go.sum` present for dependency verification
-- Commands: `go mod download`, `go mod tidy`
+**Package Manager:**
+- Go Modules (`go.mod` / `go.sum`)
+- Lockfile: `go.sum` present for dependency verification
 
 ## Frameworks & Core Libraries
 
@@ -34,121 +32,124 @@
 **System Tray GUI:**
 - `github.com/getlantern/systray` v1.2.2 - Windows system tray integration
   - Location: `src/tray/tray.go`
-  - Blocks on main thread during `tray.Run()`
-
-**OpenTelemetry (Observability):**
-- `go.opentelemetry.io/otel` v1.24.0 - Distributed tracing
-- `go.opentelemetry.io/otel/exporters/prometheus` v0.46.0 - Prometheus metrics exporter
-- `go.opentelemetry.io/otel/sdk` v1.24.0 - OpenTelemetry SDK
-- `go.opentelemetry.io/otel/trace` v1.24.0 - Tracing API
-- Location: `src/telemetry/telemetry.go`
-
-**Prometheus Metrics:**
-- `github.com/prometheus/client_golang` v1.19.0 - Prometheus client library
-  - Exposes metrics at `http://localhost:9090/metrics` (configurable)
-  - Metrics for messages, LLM requests, tool calls, task execution
+  - Blocks on main thread during `tray.Run()` (Windows GUI requirement)
 
 **Configuration:**
-- `gopkg.in/yaml.v3` v3.0.1 - YAML parser for `config.yaml` loading
+- `gopkg.in/yaml.v3` v3.0.1 - YAML parser for `config.yaml`
   - Location: `src/config/config.go`
 
 **Utilities:**
-- `github.com/google/uuid` v1.6.0 - UUID generation for session IDs
+- `github.com/google/uuid` v1.6.0 - UUID generation for task IDs and session IDs
+  - Used in: `src/tasks/executor.go`, `src/llm/claude_cli.go`
+
+## Observability Stack
+
+**OpenTelemetry:**
+- `go.opentelemetry.io/otel` v1.24.0 - Distributed tracing API
+- `go.opentelemetry.io/otel/sdk` v1.24.0 - OTel SDK (traces + metrics)
+- `go.opentelemetry.io/otel/exporters/prometheus` v0.46.0 - Prometheus exporter bridge
+- `go.opentelemetry.io/otel/metric` v1.24.0 - Metrics API
+- `go.opentelemetry.io/otel/trace` v1.24.0 - Tracing API
+- Location: `src/telemetry/telemetry.go`
+
+**Prometheus:**
+- `github.com/prometheus/client_golang` v1.19.0 - Prometheus client library
+- Exposes metrics at `http://localhost:9090/metrics` (port/path configurable)
+- Metrics: message counts, LLM latency, tool call stats, task execution stats
 
 ## Key Dependencies (Indirect)
 
-**Prometheus Ecosystem:**
 - `github.com/prometheus/client_model` v0.6.0 - Prometheus data model
 - `github.com/prometheus/common` v0.48.0 - Prometheus utilities
-- `github.com/prometheus/procfs` v0.12.0 - Linux `/proc` filesystem reader
+- `github.com/go-logr/logr` v1.4.1 - Structured logging interface (OTel)
+- `golang.org/x/sys` v0.41.0 - Windows system calls (signals, paths)
+- `google.golang.org/protobuf` v1.36.11 - Protocol Buffers (OTel support)
+- `github.com/stretchr/testify` v1.11.1 - Test assertions (indirect)
 
-**Go Logging & Observability:**
-- `github.com/go-logr/logr` v1.4.1 - Structured logging interface
-- `github.com/go-logr/stdr` v1.2.2 - Standard library logging adapter
-- `google.golang.org/protobuf` v1.36.11 - Protocol Buffers (OpenTelemetry support)
+## Build System
 
-**System Libraries:**
-- `golang.org/x/sys` v0.41.0 - Windows system calls (signal handling, path operations)
+**Build Tool:** GNU Make (`Makefile`)
 
-**Testing & Development:**
-- `github.com/stretchr/testify` v1.11.1 - Assertions and mocking (development only)
+**Commands:**
+```bash
+make build            # Production: go build -ldflags="-H windowsgui" -o build/officeclaw.exe ./src
+make build-console    # Development: go build -o build/officeclaw.exe ./src (with console output)
+make run              # go run ./src
+make test             # go test ./test/... -v -count=1
+make test-coverage    # Coverage report -> coverage.out, coverage.html
+make lint             # golangci-lint run ./...
+make fmt              # gofmt -s -w .
+make deps             # go mod download && go mod tidy
+make clean            # rm -rf build/ coverage.out coverage.html
+```
+
+**Output Artifacts:**
+- `build/officeclaw.exe` - Windows GUI executable (or console build)
+- `coverage.out` / `coverage.html` - Test coverage (from `make test-coverage`)
+- `officeclaw.log` - Runtime log file (path configurable)
 
 ## Configuration
 
-**Environment Variables (Overrides):**
-- `TELEGRAM_BOT_TOKEN` - Telegram bot token from @BotFather
-- `OPENAI_API_KEY` - OpenAI API key (if using OpenAI provider)
-- `AZURE_OPENAI_ENDPOINT` - Azure OpenAI endpoint URL
+**Primary config:** `config.yaml` (copy from `config.example.yaml`)
+- YAML format, loaded in `src/config/config.go` via `config.Load()`
+- Environment variable overrides applied in `applyEnvOverrides()`
+- Sensible defaults applied in `applyDefaults()`
+- Validation in `Config.Validate()`
+
+**Environment Variables (override config.yaml values):**
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token
+- `AZURE_OPENAI_ENDPOINT` - Azure OpenAI endpoint
 - `AZURE_OPENAI_API_KEY` - Azure OpenAI API key
-- `CLAUDE_CLI_PATH` - Path to Claude CLI executable (auto-detected if empty)
-- `COPILOT_CLI_PATH` - Path to Copilot CLI executable (auto-detected if empty)
-- `LOCALAPPDATA` - Windows environment variable used by Copilot CLI discovery
-- `CONFIG_PATH` - Path to configuration file (defaults to `config.yaml`)
+- `OPENAI_API_KEY` - OpenAI API key
+- `CLAUDE_CLI_PATH` - Path to Claude Code CLI executable
+- `COPILOT_CLI_PATH` - Path to GitHub Copilot CLI executable
+- `CONFIG_PATH` - Config file path (MCP server mode only)
 
-**Configuration Files:**
-- `config.yaml` - Main configuration file (copy from `config.example.yaml`)
-  - YAML format, loaded via `src/config/config.go`
-  - Supports environment variable overrides for sensitive values
+## Development Tools
 
-**Build Files:**
-- `Makefile` - Build automation with targets: `build`, `build-console`, `run`, `test`, `test-coverage`, `lint`, `fmt`, `tidy`, `clean`, `deps`
-- `go.mod` / `go.sum` - Go module manifest and lock file
+**Linting:**
+- `golangci-lint` - Run via `make lint`
+
+**Formatting:**
+- `gofmt -s -w .` - Run via `make fmt`
+
+**Testing:**
+- Go standard `testing` package
+- Tests in `test/` directory (separate from `src/`)
+- `github.com/stretchr/testify` for assertions
 
 ## Platform Requirements
 
 **Development:**
-- Go 1.25.0 or later
-- Windows system (for system tray and VPN tools)
+- Go 1.25.0+
+- Windows 10/11 (system tray and VPN tools are Windows-native)
 - golangci-lint (for `make lint`)
 - Git
 
 **Production:**
-- Windows operating system (tested on Windows 11 Enterprise)
-- Telegram bot token (from @BotFather)
-- One of: Claude CLI (SSO auth), OpenAI API key, Azure OpenAI credentials, or Copilot CLI (GitHub OAuth)
-- Optional: Memory service (LLMCrawl) for long-term conversation memory
+- Windows 10/11 desktop (system tray application, single-machine deployment)
+- Telegram bot token from @BotFather
+- At least one LLM provider: Claude CLI (SSO), OpenAI API key, Azure OpenAI, or Copilot CLI (GitHub OAuth)
+- Optional: Docker for LLMCrawl memory service
 
-**CLI Tools (Optional but recommended):**
-- Claude CLI (for `OC:` and `OCC:` modes) - Uses organization SSO authentication
-- GitHub Copilot CLI (for `OCCO:` mode) - Uses GitHub OAuth
-- PowerShell (for task execution via `command` field)
+**CLI Tools (auto-detected, optional):**
+- Claude Code CLI - For `OC:` mode (Anthropic provider) and `OCC:` mode (direct Claude)
+- GitHub Copilot CLI - For `OCCO:` mode (direct Copilot)
+- PowerShell - For task command execution
 
-## Build Artifacts
+## Telemetry
 
-**Output:**
-- `build/officeclaw.exe` - Compiled binary (GUI version)
-- `coverage.out` - Test coverage data (from `make test-coverage`)
-- `coverage.html` - HTML coverage report
-
-**Logging:**
-- `officeclaw.log` - Main application log (path configurable via `logging.file`)
-- Log rotation: max 50 MB per file, up to 3 backups (configurable)
-
-## Telemetry & Observability
-
-**Enabled by Default (configurable):**
-- OpenTelemetry tracing (exporters configurable, no built-in receiver)
-- Prometheus metrics at `http://localhost:9090/metrics` (port configurable)
-- Service name: "officeclaw" (configurable)
-
-**Metrics Exported:**
+**Prometheus Metrics (configurable):**
 - `officeclaw.messages.received` - Trigger messages received
 - `officeclaw.messages.processed` - Messages successfully processed
-- `officeclaw.llm.requests` - LLM API calls (labeled by provider, model, status)
+- `officeclaw.llm.requests` - LLM API calls (by provider, model, status)
 - `officeclaw.llm.latency_seconds` - LLM call duration histogram
-- `officeclaw.tools.calls` - Tool invocations (labeled by tool, status)
-- `officeclaw.tasks.executed` - Task executions (labeled by task, status)
+- `officeclaw.tools.calls` - Tool invocations (by tool, status)
+- `officeclaw.tasks.executed` - Task executions (by task, status)
 
-## External Service Dependencies
-
-**Runtime Services (all optional, with graceful degradation):**
-- Telegram Bot API (`api.telegram.org`) - Message receiving and sending
-- LLM providers:
-  - Anthropic Claude (via Claude CLI subprocess with SSO)
-  - OpenAI API (`api.openai.com`)
-  - Azure OpenAI (custom endpoint)
-  - GitHub Copilot (via Copilot CLI subprocess with OAuth)
-- LLMCrawl Memory Service (optional, on `localhost:8007` by default)
+**OpenTelemetry Tracing:**
+- Service name: "officeclaw" (configurable)
+- OTLP endpoint configurable for external collectors
 
 ---
 
