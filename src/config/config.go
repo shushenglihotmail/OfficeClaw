@@ -140,10 +140,12 @@ type VPNConfig struct {
 
 // Task defines a runnable task.
 type Task struct {
-	Description    string `yaml:"description"`
-	Command        string `yaml:"command,omitempty"`
-	TimeoutSeconds int    `yaml:"timeout_seconds"`
-	Schedule       string `yaml:"schedule,omitempty"` // cron expression
+	Description               string `yaml:"description"`
+	Command                   string `yaml:"command,omitempty"`
+	TimeoutSeconds            int    `yaml:"timeout_seconds"`
+	Schedule                  string `yaml:"schedule,omitempty"`                    // cron expression
+	AllowDuplicate            bool   `yaml:"allow_duplicate,omitempty"`             // Allow concurrent runs (default: false)
+	MonitoringIntervalSeconds int    `yaml:"monitoring_interval_seconds,omitempty"` // If > 0, send progress every N seconds
 }
 
 // TelemetryConfig controls observability.

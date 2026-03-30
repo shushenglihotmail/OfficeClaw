@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/officeclaw/src/tasks"
 	"github.com/officeclaw/src/telegram"
@@ -41,8 +42,10 @@ func (t *TaskExecutionTool) Description() string {
 	for _, tl := range taskList {
 		names = append(names, fmt.Sprintf("%s (%s)", tl.Name, tl.Description))
 	}
-	return fmt.Sprintf("Execute a predefined task by name. ONLY the following tasks are allowed — do NOT invent task names: %s. "+
-		"Match the user's request to the best task by its description.",
+	return fmt.Sprintf("Execute or cancel a predefined task by name. ONLY the following tasks are allowed — do NOT invent task names: %s. "+
+		"Match the user's request to the best task by its description. "+
+		"To check task status or progress, use view_task_log instead. "+
+		"To cancel a running task, use this tool with action 'cancel'.",
 		strings.Join(names, "; "))
 }
 
@@ -60,9 +63,14 @@ func (t *TaskExecutionTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
+			"action": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"execute", "cancel"},
+				"description": "Action to perform: 'execute' (default) runs the task, 'cancel' stops a running task by name or ID",
+			},
 			"task_name": map[string]interface{}{
 				"type":        "string",
-				"description": fmt.Sprintf("Task to execute. Available: %s", string(taskJSON)),
+				"description": fmt.Sprintf("Task to execute or cancel. Available: %s", string(taskJSON)),
 			},
 			"parameters": map[string]interface{}{
 				"type":        "object",
@@ -82,6 +90,7 @@ func (t *TaskExecutionTool) Parameters() map[string]interface{} {
 }
 
 type taskExecArgs struct {
+	Action     string                 `json:"action"`     // "execute" (default) or "cancel"
 	TaskName   string                 `json:"task_name"`
 	Parameters map[string]interface{} `json:"parameters"`
 	Schedule   string                 `json:"schedule"`
@@ -92,6 +101,11 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 	args, err := ParseArgs[taskExecArgs](arguments)
 	if err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	// Handle cancel action
+	if args.Action == "cancel" {
+		return t.cancelTask(args.TaskName)
 	}
 
 	if args.Schedule != "" {
@@ -118,21 +132,53 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 	}
 
 	if runAsync {
-		// Run asynchronously
+		// Check for duplicate unless explicitly allowed
+		if !taskDef.AllowDuplicate {
+			for _, rt := range t.executor.ListRunningTasks() {
+				if rt.TaskName == args.TaskName {
+					elapsed := time.Since(rt.StartTime).Round(time.Second)
+					return fmt.Sprintf("Task '%s' is already running (ID: %s, started %s ago).\n"+
+						"Log file: %s\n"+
+						"Use view_task_log with action 'read_log' and log_file '%s' to check progress.\n"+
+						"Use execute_task with action 'cancel' and task_name '%s' to stop it.",
+						args.TaskName, rt.ID, elapsed, rt.LogFile, rt.LogFile, args.TaskName), nil
+				}
+			}
+		}
+
+		// Set up monitoring if configured
 		chatID := t.lastChatID
+		var monitor *tasks.MonitorConfig
+		if taskDef.MonitoringIntervalSeconds > 0 && t.tgClient != nil && chatID != "" {
+			monitor = &tasks.MonitorConfig{
+				IntervalSeconds: taskDef.MonitoringIntervalSeconds,
+				Send: func(text string) {
+					_ = t.tgClient.SendMessage(context.Background(), chatID, text)
+				},
+			}
+		}
+
+		// Run asynchronously
 		taskID, logFile, err := t.executor.ExecuteAsync(ctx, args.TaskName, args.Parameters,
 			func(result *tasks.TaskResult) {
 				t.notifyComplete(chatID, result)
-			})
+			}, monitor)
 		if err != nil {
 			return "", fmt.Errorf("starting async task: %w", err)
 		}
 
-		return fmt.Sprintf("Task '%s' started in background.\n"+
-			"Task ID: %s\n"+
-			"Log file: %s\n"+
-			"You will be notified via Telegram when it completes.",
-			args.TaskName, taskID, logFile), nil
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Task '%s' started in background.\n", args.TaskName))
+		sb.WriteString(fmt.Sprintf("Task ID: %s\n", taskID))
+		sb.WriteString(fmt.Sprintf("Log file: %s\n", logFile))
+		if monitor != nil {
+			sb.WriteString(fmt.Sprintf("Live progress will be sent every %ds.\n", taskDef.MonitoringIntervalSeconds))
+		}
+		sb.WriteString("You will be notified via Telegram when it completes.\n")
+		sb.WriteString(fmt.Sprintf("To check progress: use view_task_log with action 'read_log' and log_file '%s'.\n", logFile))
+		sb.WriteString(fmt.Sprintf("To cancel: use execute_task with action 'cancel' and task_name '%s'.\n", args.TaskName))
+		sb.WriteString("Do NOT call execute_task with action 'execute' again for this task while it is running.")
+		return sb.String(), nil
 	}
 
 	// Run synchronously
@@ -141,6 +187,22 @@ func (t *TaskExecutionTool) Execute(ctx context.Context, arguments string) (stri
 		return "", err
 	}
 	return result.String(), nil
+}
+
+// cancelTask cancels a running async task.
+func (t *TaskExecutionTool) cancelTask(taskName string) (string, error) {
+	if taskName == "" {
+		return "", fmt.Errorf("task_name is required for cancel action")
+	}
+	name, found := t.executor.CancelTask(taskName)
+	if !found {
+		// Check if the task exists at all
+		if _, ok := t.executor.GetTask(taskName); !ok {
+			return fmt.Sprintf("No task named '%s' exists.", taskName), nil
+		}
+		return fmt.Sprintf("Task '%s' is not currently running.", taskName), nil
+	}
+	return fmt.Sprintf("Task '%s' cancellation requested. The task will be stopped.", name), nil
 }
 
 // notifyComplete sends a Telegram notification when an async task completes.

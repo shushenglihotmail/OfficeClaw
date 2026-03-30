@@ -4,6 +4,7 @@
 package tasks
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -20,6 +21,12 @@ import (
 	"github.com/officeclaw/src/config"
 	"github.com/officeclaw/src/telemetry"
 )
+
+// MonitorConfig configures live progress monitoring for async tasks.
+type MonitorConfig struct {
+	IntervalSeconds int
+	Send            func(text string) // Callback to send progress message to user
+}
 
 // TaskInfo describes a registered task (for listing).
 type TaskInfo struct {
@@ -176,6 +183,22 @@ func (e *Executor) ListRunningTasks() []*RunningTask {
 		result = append(result, rt)
 	}
 	return result
+}
+
+// CancelTask cancels a running async task by name or ID.
+// Returns the task name and true if found and cancelled, empty string and false otherwise.
+func (e *Executor) CancelTask(nameOrID string) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for id, rt := range e.running {
+		if rt.TaskName == nameOrID || rt.ID == nameOrID {
+			rt.Cancel()
+			taskName := rt.TaskName
+			delete(e.running, id)
+			return taskName, true
+		}
+	}
+	return "", false
 }
 
 // LogDirectory returns the path to the task log directory.
@@ -367,8 +390,9 @@ func (e *Executor) Execute(ctx context.Context, taskName string, params map[stri
 
 // ExecuteAsync runs a task asynchronously and calls onComplete when done.
 // Returns the task ID and log file path immediately.
+// If monitor is non-nil with IntervalSeconds > 0, periodically sends progress via monitor.Send.
 func (e *Executor) ExecuteAsync(ctx context.Context, taskName string, params map[string]interface{},
-	onComplete func(*TaskResult)) (string, string, error) {
+	onComplete func(*TaskResult), monitor *MonitorConfig) (string, string, error) {
 
 	taskDef, ok := e.registry.Get(taskName)
 	if !ok {
@@ -425,6 +449,14 @@ func (e *Executor) ExecuteAsync(ctx context.Context, taskName string, params map
 			e.mu.Unlock()
 		}()
 
+		// Start monitoring goroutine if configured
+		monitoring := monitor != nil && monitor.IntervalSeconds > 0 && monitor.Send != nil
+		var monitorDone chan struct{}
+		if monitoring {
+			monitorDone = make(chan struct{})
+			go e.runMonitor(logPath, taskName, monitor, monitorDone)
+		}
+
 		startTime := time.Now()
 		result := &TaskResult{
 			TaskName:  taskName,
@@ -463,6 +495,11 @@ func (e *Executor) ExecuteAsync(ctx context.Context, taskName string, params map
 			result.Status = "success"
 			result.Output = fmt.Sprintf("Task '%s' is an LLM-driven task: %s", taskName, taskDef.Description)
 			result.Duration = time.Since(startTime)
+		}
+
+		// Stop monitoring before completion callback
+		if monitorDone != nil {
+			close(monitorDone)
 		}
 
 		// Call completion callback
@@ -517,6 +554,74 @@ func (e *Executor) executeCommand(ctx context.Context, taskName, command string,
 	// Run the command
 	err := cmd.Run()
 	return outputBuf.String(), err
+}
+
+// runMonitor tails the log file and sends periodic progress updates.
+// Stops when done channel is closed.
+func (e *Executor) runMonitor(logPath, taskName string, monitor *MonitorConfig, done <-chan struct{}) {
+	ticker := time.NewTicker(time.Duration(monitor.IntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	var lastOffset int64
+	startTime := time.Now()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			newContent, newOffset := e.readLogFrom(logPath, lastOffset)
+			if newOffset > lastOffset && newContent != "" {
+				lastOffset = newOffset
+				lines := tailLines(newContent, 100)
+				elapsed := time.Since(startTime).Round(time.Second)
+				msg := fmt.Sprintf("Task '%s' progress (%s elapsed):\n---\n%s\n---",
+					taskName, elapsed, lines)
+				monitor.Send(msg)
+			}
+		}
+	}
+}
+
+// readLogFrom reads a log file starting from the given byte offset.
+// Returns the new content and the new offset.
+func (e *Executor) readLogFrom(logPath string, offset int64) (string, int64) {
+	f, err := os.Open(logPath)
+	if err != nil {
+		return "", offset
+	}
+	defer f.Close()
+
+	// Get current file size
+	info, err := f.Stat()
+	if err != nil || info.Size() <= offset {
+		return "", offset
+	}
+
+	// Seek to last read position
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return "", offset
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", offset
+	}
+
+	return string(data), offset + int64(len(data))
+}
+
+// tailLines returns the last n lines from a string.
+func tailLines(s string, n int) string {
+	scanner := bufio.NewScanner(strings.NewReader(s))
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 // ScheduleTask registers a cron-scheduled task.

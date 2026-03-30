@@ -148,6 +148,8 @@ tasks:
     description: "Set up a new OS repository build on the machine"
     command: "c:\\tools\\setup-build.ps1 -branch main"
     timeout_seconds: 600
+    monitoring_interval_seconds: 30  # Send progress to Telegram every 30s
+    # allow_duplicate: false         # Default: only one instance at a time
 
   # More examples:
   # check_disk:
@@ -160,6 +162,10 @@ tasks:
   #   command: "Restart-Service -Name MyService -Force"
   #   timeout_seconds: 120
   #   schedule: "0 3 * * *"  # cron format, optional
+  #
+  # Task monitoring and duplicate control:
+  #   monitoring_interval_seconds: N  # If > 0, stream console output every N seconds
+  #   allow_duplicate: true           # Allow multiple concurrent runs (default: false)
 
 # Telemetry / Observability
 telemetry:

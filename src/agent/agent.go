@@ -40,6 +40,9 @@ CRITICAL RULES:
 - For tasks requiring multiple steps, complete all steps before sending your final response.
 - When asked to turn on, connect, or enable VPN, use the vpn_control tool with action "connect" — NOT execute_task.
 - Do NOT call send_message in the same round as a tool that performs an action. Wait for the action result first.
+- When users ask about task progress, status, or output, use view_task_log — do NOT re-execute the task.
+- To cancel a running task, use execute_task with action "cancel" and the task name.
+- Do NOT launch a task that is already running unless the user explicitly asks to run another instance.
 
 When you receive a message, analyze the request, use appropriate tools, and send a helpful response.`
 

@@ -26,8 +26,9 @@ func NewTaskLogTool(executor *tasks.Executor) *TaskLogTool {
 func (t *TaskLogTool) Name() string { return "view_task_log" }
 
 func (t *TaskLogTool) Description() string {
-	return "View logs from task executions. Can show logs from running tasks, recent task runs, " +
-		"or find logs by task name and approximate time. Use this when users ask to see task output or logs."
+	return "View and monitor task executions. ALWAYS use this tool (not execute_task) when users ask about " +
+		"task progress, status, or output. Use action 'list_running' to see currently running tasks, " +
+		"'list_recent' for recent logs, or 'read_log' to read task output."
 }
 
 func (t *TaskLogTool) Parameters() map[string]interface{} {
