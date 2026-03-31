@@ -246,7 +246,13 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	if err != nil {
 		logger.Printf("Warning: Claude CLI agent not available: %v", err)
 	} else {
-		tgClient.SetClaudeHandler(claudeAgent.HandleMessage)
+		tgClient.SetClaudeHandler(func(ctx context.Context, msg telegram.IncomingMessage) {
+			// Set chat ID for async task notifications and monitoring via MCP
+			if taskExecTool != nil {
+				taskExecTool.SetChatID(msg.ChatID)
+			}
+			claudeAgent.HandleMessage(ctx, msg)
+		})
 		logger.Printf("Claude CLI agent active (trigger: %s, folder: %s, reset: %q)",
 			cfg.Telegram.ClaudeTrigger, cfg.Telegram.ClaudeWorkingFolder, cfg.Telegram.ClaudeSessionResetKeyword)
 	}
@@ -265,7 +271,13 @@ func runApp(ctx context.Context, cancel context.CancelFunc, configPath string) {
 	if err != nil {
 		logger.Printf("Warning: Copilot CLI agent not available: %v", err)
 	} else {
-		tgClient.SetCopilotHandler(copilotAgent.HandleMessage)
+		tgClient.SetCopilotHandler(func(ctx context.Context, msg telegram.IncomingMessage) {
+			// Set chat ID for async task notifications and monitoring via MCP
+			if taskExecTool != nil {
+				taskExecTool.SetChatID(msg.ChatID)
+			}
+			copilotAgent.HandleMessage(ctx, msg)
+		})
 		logger.Printf("Copilot CLI agent active (trigger: OCCO:, folder: %s)",
 			cfg.Telegram.CopilotWorkingFolder)
 	}
